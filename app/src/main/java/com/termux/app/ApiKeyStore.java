@@ -19,6 +19,7 @@ public class ApiKeyStore {
     private static final String K_ID           = "id_";
     private static final String K_ALIAS        = "alias_";
     private static final String K_VALUE        = "value_";
+    private static final String K_BASE_URL     = "base_url_";
     private static final String K_ACTIVE_ID    = "active_id";
 
     // -------------------------------------------------------------------------
@@ -27,11 +28,13 @@ public class ApiKeyStore {
         public final String id;
         public String alias;
         public String value;
+        public String baseUrl;  // ANTHROPIC_BASE_URL，空字符串表示使用官方默认
 
-        Entry(String id, String alias, String value) {
-            this.id    = id;
-            this.alias = alias;
-            this.value = value;
+        Entry(String id, String alias, String value, String baseUrl) {
+            this.id      = id;
+            this.alias   = alias;
+            this.value   = value;
+            this.baseUrl = baseUrl == null ? "" : baseUrl;
         }
     }
 
@@ -49,10 +52,11 @@ public class ApiKeyStore {
         int count = mPrefs.getInt(K_COUNT, 0);
         List<Entry> list = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            String id    = mPrefs.getString(K_ID    + i, null);
-            String alias = mPrefs.getString(K_ALIAS + i, "");
-            String value = mPrefs.getString(K_VALUE + i, "");
-            if (id != null) list.add(new Entry(id, alias, value));
+            String id      = mPrefs.getString(K_ID      + i, null);
+            String alias   = mPrefs.getString(K_ALIAS   + i, "");
+            String value   = mPrefs.getString(K_VALUE   + i, "");
+            String baseUrl = mPrefs.getString(K_BASE_URL + i, "");
+            if (id != null) list.add(new Entry(id, alias, value, baseUrl));
         }
         return list;
     }
@@ -63,17 +67,18 @@ public class ApiKeyStore {
         ed.putInt(K_COUNT, entries.size());
         for (int i = 0; i < entries.size(); i++) {
             Entry e = entries.get(i);
-            ed.putString(K_ID    + i, e.id);
-            ed.putString(K_ALIAS + i, e.alias);
-            ed.putString(K_VALUE + i, e.value);
+            ed.putString(K_ID      + i, e.id);
+            ed.putString(K_ALIAS   + i, e.alias);
+            ed.putString(K_VALUE   + i, e.value);
+            ed.putString(K_BASE_URL + i, e.baseUrl);
         }
         ed.apply();
     }
 
     /** 添加一条新 Key，返回新建的 Entry。 */
-    public Entry add(String alias, String value) {
+    public Entry add(String alias, String value, String baseUrl) {
         List<Entry> list = loadAll();
-        Entry e = new Entry(UUID.randomUUID().toString(), alias.trim(), value.trim());
+        Entry e = new Entry(UUID.randomUUID().toString(), alias.trim(), value.trim(), baseUrl.trim());
         list.add(e);
         saveAll(list);
         return e;

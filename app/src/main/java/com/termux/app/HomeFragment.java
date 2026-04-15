@@ -17,96 +17,62 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 import com.termux.R;
+import com.termux.shared.termux.TermuxConstants;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.Map;
 
 /**
  * 简化 UI Fragment（ChatGPT 风格）。
  *
- * 完成检测策略（优先级依次）：
- *   1. 检测 Claude Code "> " 提示符重新出现 → 立即结束（最可靠）
- *   2. 连续 20 次 poll（10 秒）无新内容 → 超时兜底
+ * ── 架构 ────────────────────────────────────────────────────────────────────
  *
- * 过滤策略（尽量少过滤，保留 Claude 实际回复）：
- *   - 去 ANSI/VT 转义序列
- *   - 去 bash 提示符（user@host:path#）
- *   - 去含 Unicode 制表符（U+2500-U+257F）的行 → Claude Code TUI 边框，非内容
- *   - 去超长纯 ASCII 边框线（>= 20 chars 且仅含 -=+| ）→ TUI 分隔线
- *     短的 --- 或 | 保留，它们可能是 markdown HR / 表格
- *   - 去已知 TUI 状态行（"esc to interrupt" 等）
- *   - 去 Braille 旋转器行（⠋ Thinking... 等 Claude Code 思考动画）
- *   - 去 "> " 输入提示符（已单独用于完成检测）
+ * Chat UI 通过 ProcessBuilder 直接启动独立子进程运行 claude -p，
+ * 完全不依赖任何 TerminalSession，终端 Tab 可自由使用。
+ *
+ * 子进程命令：
+ *   bash proot-distro login ubuntu -- sh -c
+ *     'printf "%s" "PROMPT" | claude -p --output-format stream-json --verbose
+ *      --dangerously-skip-permissions [--continue]'
+ *
+ * 子进程 stdout 输出纯 JSONL，后台线程逐行解析，主线程更新 UI。
+ * type=assistant 事件是累积快照，只取最后一条。
+ * type=result 表示 Claude 已完成。
+ *
+ * ── 会话控制 ─────────────────────────────────────────────────────────────────
+ * "启动"   → 在新 TerminalSession 中运行交互式 Claude（供用户手动操作）
+ * "停止"   → 终止当前 claude -p 子进程
+ * "新建"   → 清除 --continue 标志，下次发送开启新对话
  */
 public class HomeFragment extends Fragment {
 
-    private static final int POLL_MS = 500;
-    /**
-     * 足够大，使 getRecentTerminalLines 实际上返回完整的 transcript（无滑动窗口）。
-     * 若窗口滑动，baseline 会超出新窗口的行数 → extractDelta 永远返回 "" → "…" 永远卡住。
-     * 设为 10000 后，任何实际 Claude 会话都不会超过这个数，baseline 变成绝对位置，不再有此问题。
-     */
-    private static final int MAX_LINES = 10000;
-    /**
-     * 兜底超时：60 × 500ms = 30 秒有实际内容后无新增时强制结束。
-     * 仅在 delta 非空时计数（纯思考阶段 delta 为空，计数器不增长，避免过早超时）。
-     * 正常情况下 "> " 提示符检测会先触发，无需等满 30 秒。
-     */
-    private static final int STABLE_THRESHOLD = 60;
-
-    /**
-     * 综合 ANSI/VT 转义序列正则，四个分支：
-     *
-     *  1. CSI：ESC [ {参数字节 0x20-0x3F}* {最终字节 0x40-0x7E}
-     *     参数字节范围包含 ?: ; 0-9 等，覆盖 DEC 私有模式（ESC[?2026h 等）。
-     *     旧模式 \\[[;\\d]*[A-Za-z] 不含 ?，导致 ESC[?2026h 残留为乱文。
-     *
-     *  2. OSC：ESC ] ... BEL 或 ESC \
-     *
-     *  3. DCS/SOS/PM/APC：ESC [PX^_] ... ST
-     *
-     *  4. 兜底：ESC + 任意单字符（2 字符转义序列）
-     */
-    private static final Pattern ANSI = Pattern.compile(
-        "\u001B\\[[ -?]*[@-~]" +                       // 1. CSI（含 ?-前缀私有模式）
-        "|\u001B\\].*?(?:\u0007|\u001B\\\\)" +          // 2. OSC
-        "|\u001B[PX^_].*?(?:\u0007|\u001B\\\\)" +       // 3. DCS/SOS/PM/APC
-        "|\u001B.",                                      // 4. 其余双字符序列
-        Pattern.DOTALL
-    );
-
-    /** bash 提示符行：root@ubuntu:~# */
-    private static final Pattern BASH_PROMPT = Pattern.compile(
-        "^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+:.*[#$]\\s*$");
-
-    /**
-     * 含 Unicode 制表符的行 → 纯 TUI 边框字符，绝对不是 Claude 内容。
-     * 用 find() 而非 matches()，只要行内有一个就过滤。
-     */
-    private static final Pattern HAS_BOX_CHAR = Pattern.compile("[\\u2500-\\u257F]");
-
-    /**
-     * 纯 ASCII 边框字符行（仅含 - = + | ）。
-     * 只在长度 >= 20 时过滤，避免误删 markdown 的 --- HR 或 | 列分隔。
-     */
-    private static final Pattern ASCII_SEP = Pattern.compile("^[-=+|]+$");
+    // ── Termux 路径常量 ────────────────────────────────────────────────────
+    private static final String PREFIX  = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
+    private static final String BASH    = PREFIX + "/bin/bash";
+    private static final String PROOT_D = PREFIX + "/bin/proot-distro";
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
-    private Runnable mPoller;
 
     private RecyclerView mRecycler;
-    private ChatAdapter mAdapter;
+    private ChatAdapter  mAdapter;
     private final List<ChatMessage> mMessages = new ArrayList<>();
 
     private TextView mStatusText;
     private EditText mInputEdit;
 
-    // ── 状态机 ──────────────────────────────────────────────────────────────
-    private boolean mWaitingResponse   = false;
-    private int     mBaselineLineCount = 0;
-    private String  mLastDelta         = "";
-    private int     mStableCount       = 0;
+    // ── Claude 子进程 ──────────────────────────────────────────────────────
+    private Process mClaudeProcess;
+    private Thread  mClaudeThread;
+
+    // ── 对话状态 ───────────────────────────────────────────────────────────
+    private boolean mWaitingResponse = false;
+    private boolean mSessionStarted  = false;   // 是否已有对话可 --continue
 
     // =========================================================================
 
@@ -140,291 +106,257 @@ public class HomeFragment extends Fragment {
         MaterialButton btnNewSession = view.findViewById(R.id.btn_new_session);
 
         btnSend.setOnClickListener(v -> sendOrConfirm());
+
+        // ⏎ 向当前可见 session 发送回车
         btnEnter.setOnClickListener(v -> terminal("\r"));
-        btnStart.setOnClickListener(v -> terminal("claude\r"));
-        btnStop.setOnClickListener(v -> terminal("\003"));
-        btnRestart.setOnClickListener(v -> {
-            terminal("\003");
-            mHandler.postDelayed(() -> terminal("claude\r"), 1000);
-        });
-        btnNewSession.setOnClickListener(v -> {
+
+        // "启动"：新建 session，运行交互式 Claude（inline 注入 API Key，避免 .bashrc 早返回问题）
+        btnStart.setOnClickListener(v -> {
             TermuxActivity a = act();
-            if (a != null) a.addNewSessionFromHome();
+            if (a != null) {
+                // 读取当前激活的 Key
+                ApiKeyStore store2   = new ApiKeyStore(requireContext());
+                String activeId2     = store2.getActiveId();
+                String startKey      = "";
+                String startBaseUrl  = "";
+                if (activeId2 != null) {
+                    for (ApiKeyStore.Entry e : store2.loadAll()) {
+                        if (e.id.equals(activeId2)) { startKey = e.value; startBaseUrl = e.baseUrl; break; }
+                    }
+                }
+                String keyEsc = startKey.replace("'", "'\\''");
+                String urlEsc = startBaseUrl.replace("'", "'\\''");
+                String startCmd = "ANTHROPIC_API_KEY='" + keyEsc + "'"
+                        + (startBaseUrl.isEmpty() ? "" : " ANTHROPIC_BASE_URL='" + urlEsc + "'")
+                        + " claude";
+                a.addNewSessionFromHome();
+                terminal("proot-distro login ubuntu -- sh -c '" + startCmd + "'\r");
+            }
+        });
+
+        // "停止"：终止 claude -p 子进程
+        btnStop.setOnClickListener(v -> stopClaudeProcess());
+
+        // "重启"：停止子进程，清除对话历史标志
+        btnRestart.setOnClickListener(v -> {
+            stopClaudeProcess();
+            mSessionStarted = false;
+            mAdapter.addMessage(ChatMessage.assistant("— 对话已重置 —"));
+            scrollToBottom();
+        });
+
+        // "新建会话"：清除 --continue 标志（下次发送开启全新对话）
+        btnNewSession.setOnClickListener(v -> {
+            stopClaudeProcess();
+            mSessionStarted = false;
         });
     }
 
-    @Override
-    public void onResume() {
-        super.onResume();
-        startPolling();
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
-        stopPolling();
-    }
+    @Override public void onResume() { super.onResume(); startStatusPolling(); }
+    @Override public void onPause()  { super.onPause();  stopStatusPolling();  }
 
     // =========================================================================
-    // 发送
+    // 发送 — ProcessBuilder 独立进程
     // =========================================================================
 
     private void sendOrConfirm() {
-        String text = mInputEdit.getText().toString().trim();
+        if (mWaitingResponse) return;
 
-        if (text.isEmpty()) {
-            terminal("\r");
+        String text = mInputEdit.getText().toString().trim();
+        if (text.isEmpty()) { terminal("\r"); return; }
+
+        // 检查 API Key
+        ApiKeyStore store = new ApiKeyStore(requireContext());
+        String activeId = store.getActiveId();
+        String apiKey   = null;
+        String baseUrl  = "";
+        if (activeId != null) {
+            for (ApiKeyStore.Entry e : store.loadAll()) {
+                if (e.id.equals(activeId)) { apiKey = e.value; baseUrl = e.baseUrl; break; }
+            }
+        }
+        if (apiKey == null || apiKey.isEmpty()) {
+            mAdapter.addMessage(ChatMessage.user(text));
+            mInputEdit.setText("");
+            mAdapter.addMessage(ChatMessage.assistant("⚠ 请先在「API Key」页面添加并激活一个 API Key。"));
+            scrollToBottom();
             return;
         }
 
-        TermuxActivity a = act();
-
-        // ① 先记录 baseline（发送之前！），避免把发送前的内容算进回复
-        if (a != null) {
-            mBaselineLineCount = lineCount(filter(a.getRecentTerminalLines(MAX_LINES)));
-        }
-
-        // ② 用户气泡
         mAdapter.addMessage(ChatMessage.user(text));
         scrollToBottom();
-
-        // ③ 发文本 + \r（80ms 间隔，防 readline 丢字符）
-        terminal(text);
-        mHandler.postDelayed(() -> terminal("\r"), 80);
         mInputEdit.setText("");
-
-        // ④ 占位 ASSISTANT 气泡
         mAdapter.addMessage(ChatMessage.assistant("…"));
         scrollToBottom();
 
         mWaitingResponse = true;
-        mStableCount     = 0;
-        mLastDelta       = "";
+        updateStatus("● 运行中", 0xFF1565C0);
+
+        final String finalKey     = apiKey;
+        final String finalBaseUrl = baseUrl;
+        final String finalText    = text;
+        final boolean doContinue  = mSessionStarted;
+
+        mClaudeThread = new Thread(() -> {
+            String lastSnapshot = "";
+            try {
+                // 单引号转义：' → '\''
+                String escaped    = finalText.replace("'", "'\\''");
+                String escapedKey = finalKey.replace("'", "'\\''");
+                String escapedUrl = finalBaseUrl.replace("'", "'\\''");
+
+                String claudeCmd = "printf '%s' '" + escaped + "'"
+                        + " | ANTHROPIC_API_KEY='" + escapedKey + "'"
+                        + (finalBaseUrl.isEmpty() ? "" : " ANTHROPIC_BASE_URL='" + escapedUrl + "'")
+                        + " claude -p --output-format stream-json --verbose"
+                        + (doContinue ? " --continue" : "")
+                        + " 2>/dev/null";
+
+                ProcessBuilder pb = new ProcessBuilder(BASH, PROOT_D, "login", "ubuntu", "--", "sh", "-c", claudeCmd);
+                setupEnv(pb.environment(), finalKey, finalBaseUrl);
+                pb.redirectErrorStream(false);
+
+                mClaudeProcess = pb.start();
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(mClaudeProcess.getInputStream()));
+
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String t = line.trim();
+                    if (!t.startsWith("{")) continue;
+                    String snap = extractText(t);
+                    if (snap != null) {
+                        lastSnapshot = snap;
+                        final String ui = lastSnapshot;
+                        mHandler.post(() -> { mAdapter.updateLastAssistant(ui); scrollToBottom(); });
+                    }
+                }
+                mClaudeProcess.waitFor();
+
+            } catch (InterruptedException ignored) {
+                // 被 stopClaudeProcess() 中断，正常退出
+            } catch (Exception e) {
+                final String err = e.getMessage();
+                mHandler.post(() -> mAdapter.updateLastAssistant("⚠ 进程错误：" + err));
+            }
+
+            final String finalSnap = lastSnapshot;
+            mHandler.post(() -> {
+                if (finalSnap.isEmpty()) dropPlaceholder();
+                mWaitingResponse = false;
+                mSessionStarted  = true;
+                updateStatus("● 就绪", 0xFF2E7D32);
+            });
+        }, "ClaudeProcess");
+        mClaudeThread.setDaemon(true);
+        mClaudeThread.start();
     }
 
+    private void stopClaudeProcess() {
+        if (mClaudeProcess != null) {
+            mClaudeProcess.destroy();
+            mClaudeProcess = null;
+        }
+        if (mClaudeThread != null) {
+            mClaudeThread.interrupt();
+            mClaudeThread = null;
+        }
+        mWaitingResponse = false;
+        updateStatus("● 就绪", 0xFF2E7D32);
+    }
+
+    /** 设置子进程所需的 Termux + ubuntu 环境变量。 */
+    private void setupEnv(Map<String, String> env, String apiKey, String baseUrl) {
+        env.put("PREFIX",           PREFIX);
+        env.put("HOME",             TermuxConstants.TERMUX_HOME_DIR_PATH);
+        env.put("TMPDIR",           TermuxConstants.TERMUX_TMP_PREFIX_DIR_PATH);
+        env.put("PATH",             TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH
+                                    + ":" + TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/applets");
+        env.put("LD_LIBRARY_PATH",  TermuxConstants.TERMUX_LIB_PREFIX_DIR_PATH);
+        env.put("LANG",             "en_US.UTF-8");
+        env.put("ANTHROPIC_API_KEY", apiKey);
+        if (baseUrl != null && !baseUrl.isEmpty()) {
+            env.put("ANTHROPIC_BASE_URL", baseUrl);
+        }
+    }
+
+    // =========================================================================
+    // JSONL 解析（在后台线程调用）
+    // =========================================================================
+
+    /**
+     * 从单行 JSONL 中提取 type=assistant 的文字快照。
+     * stream-json 格式下每个 assistant 事件是累积快照，取最后一个即可。
+     * 返回 null 表示本行不是 assistant 事件或无文字内容。
+     */
+    @Nullable
+    private String extractText(String jsonLine) {
+        if (!jsonLine.contains("\"type\":\"assistant\"")) return null;
+        try {
+            JSONObject obj = new JSONObject(jsonLine);
+            if (!"assistant".equals(obj.optString("type"))) return null;
+            JSONObject msg = obj.optJSONObject("message");
+            if (msg == null) return null;
+            JSONArray content = msg.optJSONArray("content");
+            if (content == null) return null;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < content.length(); i++) {
+                JSONObject item = content.getJSONObject(i);
+                if ("text".equals(item.optString("type"))) {
+                    String txt = item.optString("text");
+                    if (!txt.isEmpty()) {
+                        if (sb.length() > 0) sb.append("\n");
+                        sb.append(txt);
+                    }
+                }
+            }
+            return sb.length() > 0 ? sb.toString().trim() : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    // =========================================================================
+    // 状态轮询（仅用于显示终端 session 活跃状态）
+    // =========================================================================
+
+    private Runnable mStatusPoller;
+
+    private void startStatusPolling() {
+        mStatusPoller = new Runnable() {
+            @Override public void run() {
+                if (!mWaitingResponse) {
+                    TermuxActivity a = act();
+                    boolean active = a != null && a.hasActiveSession();
+                    updateStatus(active ? "● 会话活跃" : "● 就绪",
+                                 active ? 0xFF2E7D32    : 0xFF888888);
+                }
+                mHandler.postDelayed(this, 2000);
+            }
+        };
+        mHandler.post(mStatusPoller);
+    }
+
+    private void stopStatusPolling() {
+        if (mStatusPoller != null) { mHandler.removeCallbacks(mStatusPoller); mStatusPoller = null; }
+    }
+
+    // =========================================================================
+    // 工具方法
+    // =========================================================================
+
+    private void updateStatus(String text, int color) {
+        if (mStatusText != null) {
+            mStatusText.setText(text);
+            mStatusText.setTextColor(color);
+        }
+    }
+
+    /** 向当前可见 TerminalSession 写入（供"启动"和"⏎"按钮使用）。 */
     private void terminal(String text) {
         TermuxActivity a = act();
         if (a != null) a.sendTerminalInput(text);
     }
-
-    // =========================================================================
-    // 轮询
-    // =========================================================================
-
-    private void startPolling() {
-        mPoller = new Runnable() {
-            @Override
-            public void run() {
-                poll();
-                mHandler.postDelayed(this, POLL_MS);
-            }
-        };
-        mHandler.post(mPoller);
-    }
-
-    private void stopPolling() {
-        if (mPoller != null) {
-            mHandler.removeCallbacks(mPoller);
-            mPoller = null;
-        }
-    }
-
-    private void poll() {
-        TermuxActivity a = act();
-        if (a == null) return;
-
-        boolean active = a.hasActiveSession();
-        mStatusText.setText(active ? "● 会话活跃" : "● 等待中");
-        mStatusText.setTextColor(active ? 0xFF2E7D32 : 0xFF888888);
-
-        if (!mWaitingResponse) return;
-
-        String raw      = a.getRecentTerminalLines(MAX_LINES);
-        String filtered = filter(raw);
-        String delta    = extractDelta(filtered);
-        // 检测 Claude Code "> " 提示符：仅在已有新内容时才触发，
-        // 避免发送后、Claude 开始处理前的空窗期误判。
-        boolean claudeDone = !mLastDelta.isEmpty() && isClaudeDone(raw);
-
-        if (!delta.equals(mLastDelta)) {
-            // 有新内容：重置稳定计数，实时更新气泡（流式显示）
-            mStableCount = 0;
-            mLastDelta   = delta;
-            if (!delta.isEmpty()) {
-                mAdapter.updateLastAssistant(delta);
-                scrollToBottom();
-            }
-        } else if (!delta.isEmpty()) {
-            // 仅在 delta 非空时才计数：纯思考阶段所有噪声均被过滤，delta 为空；
-            // 若此时也计数，10 秒后超时会过早结束等待，导致实际回复被漏掉。
-            mStableCount++;
-        }
-
-        // 终止条件：检测到 "> " 提示符（Claude 已就绪）或超时兜底
-        if (claudeDone || mStableCount >= STABLE_THRESHOLD) {
-            if (delta.isEmpty()) dropPlaceholder();
-            else mAdapter.updateLastAssistant(delta);
-            mWaitingResponse = false;
-            mStableCount     = 0;
-        }
-    }
-
-    // =========================================================================
-    // Claude 完成检测
-    // =========================================================================
-
-    /**
-     * 检测 Claude Code 是否已完成回复，显示出 "> " 输入提示符。
-     *
-     * 从末尾往前扫描（跳过空行），遇到第一个非空行：
-     *   - 是 ">" 或 "> " → Claude 正在等待下一条输入 → 返回 true
-     *   - 其他内容       → 仍在输出            → 返回 false
-     *
-     * 注意：此方法在 raw 字符串上操作（ANSI 去除后），不依赖 filter() 的去噪逻辑。
-     */
-    private boolean isClaudeDone(String raw) {
-        if (raw == null || raw.isEmpty()) return false;
-        String s = ANSI.matcher(raw).replaceAll("").replace("\r\n", "\n").replace("\r", "\n");
-        String[] lines = s.split("\n", -1);
-        for (int i = lines.length - 1; i >= 0; i--) {
-            String t = lines[i].trim();
-            if (t.isEmpty()) continue;
-            // "> " 或 ">" 且后面没有实际内容 → Claude Code 等待输入提示符
-            return t.equals(">") || t.equals("> ");
-        }
-        return false;
-    }
-
-    // =========================================================================
-    // 过滤 + 提取
-    // =========================================================================
-
-    /**
-     * 过滤终端文本，尽量保留 Claude 实际回复，去掉 TUI 装饰。
-     */
-    private String filter(String raw) {
-        if (raw == null || raw.isEmpty()) return "";
-
-        // 1. 去 ANSI/VT 转义序列（含 ?-前缀 DEC 私有模式）
-        String s = ANSI.matcher(raw).replaceAll("");
-        // 2. 处理 \r：\r\n → \n（标准 Windows 换行），孤立 \r → \n（PTY 用 CR 覆写当前行，
-        //    语义等价于换行；若直接丢弃，"2.蓝色\r3.绿色" 会被拼成同一行）
-        s = s.replace("\r\n", "\n").replace("\r", "\n");
-        // 3. 去残余控制字符（0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F）
-        //    保留 \n（0x0A）和 \t（0x09）
-        s = s.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "");
-
-        String[] lines = s.split("\n", -1);
-        StringBuilder sb = new StringBuilder();
-        for (String line : lines) {
-            String t = line.trim();
-            // 剥离 Claude Code 的 UI 前缀符号：
-            //   ● (U+25CF) = 当前条目/回复指示符  → 内容在其后
-            //   ✦ (U+2726) = 状态指示符           → 后面是状态文本（会被 isNoise 过滤）
-            //   ❯ (U+276F) = 选择列表当前项指针
-            //   ⊛ (U+229B) = 选中项指示符（circled asterisk）
-            //   ◉ (U+25C9) = 已选项（fisheye）
-            //   ○ (U+25CB) = 未选项（white circle）
-            //   · (U+00B7) = TUI 中点 bullet（动画帧 "·elizin" 等）
-            //   ⁂ (U+2042) = asterism / TUI 装饰符
-            //   * (U+002A) = 动画帧前缀（"*utng" 等）→ 剥离后 "utng"(4 字符) 被短行规则过滤
-            while (t.length() > 0 && (
-                    t.charAt(0) == '\u25CF' ||  // ●
-                    t.charAt(0) == '\u2726' ||  // ✦
-                    t.charAt(0) == '\u276F' ||  // ❯
-                    t.charAt(0) == '\u229B' ||  // ⊛
-                    t.charAt(0) == '\u25C9' ||  // ◉
-                    t.charAt(0) == '\u25CB' ||  // ○
-                    t.charAt(0) == '\u00B7' ||  // ·
-                    t.charAt(0) == '\u2042' ||  // ⁂
-                    t.charAt(0) == '*'          // *
-            )) {
-                t = t.substring(1).trim();
-            }
-            if (isNoise(t)) continue;
-            sb.append(t).append("\n");
-        }
-        return sb.toString();   // 不 trim 末尾，保持行数稳定
-    }
-
-    private boolean isNoise(String t) {
-        if (t.isEmpty()) return true;
-
-        // bash 提示符（user@host:path# 或 user@host:path$）
-        if (BASH_PROMPT.matcher(t).matches()) return true;
-
-        // 含 Unicode 制表符 → Claude Code TUI 边框，绝不是内容
-        if (HAS_BOX_CHAR.matcher(t).find()) return true;
-
-        // 超长纯 ASCII 边框线（>= 20 chars）→ TUI 分隔线
-        if (t.length() >= 20 && ASCII_SEP.matcher(t).matches()) return true;
-
-        // Braille 旋转器（U+2800-U+28FF）→ Claude Code "⠋ Thinking..." 动画
-        if (!t.isEmpty() && t.charAt(0) >= '\u2800' && t.charAt(0) <= '\u28FF') return true;
-
-        String lower = t.toLowerCase();
-
-        // "esc to interrupt"：匹配有空格和无空格（esctointerrupt）两种形式
-        if (lower.replaceAll("\\s", "").contains("esctointerrupt")) return true;
-        if (lower.contains("escape to interrupt")) return true;
-
-        // Claude Code 特有的状态/工具消息
-        if (lower.contains("fiddle-faddling")) return true;   // 思考动画文字
-        if (lower.equals("for shortcuts"))     return true;   // 快捷键提示
-
-        // "(thinking)" 标签 → 思考过程动画帧（可能夹杂在动画字符中间）
-        // 例：(thinking)、g(thinking)、·n(thinking)、i…(thinking) 等
-        if (lower.contains("(thinking)")) return true;
-
-        // 单词 + "..." → Claude Code 思考动画词（Ionizing...、Cooking...、Analyzing... 等）
-        // 条件：不含空格（单词），以 ... 结尾 → 思考状态行，非内容
-        if (!t.contains(" ") && t.endsWith("...")) return true;
-
-        // Tip 提示行（└ Tip: ... ）
-        if (t.startsWith("\u2514")) return true;   // └ (U+2514)
-        if (lower.contains("tip:"))  return true;
-
-        // Claude Code 输入提示符（已单独用于完成检测，不展示给用户）
-        if (t.equals(">") || t.equals("> ")) return true;
-
-        // 交互式选择菜单导航提示行（"Enter to select · ↑/↓ to navigate · Esc to cancel"）
-        // 去空格后包含 "toselect" 或 "tonavigate" → 纯导航提示，不是内容
-        if (lower.replaceAll("\\s", "").contains("toselect")) return true;
-        if (lower.replaceAll("\\s", "").contains("tonavigate")) return true;
-
-        // TUI 动画帧残骸：≤ 4 字符且不含空格，且不含数字或中文
-        // Claude Code 进度动画用 cursor-up + overwrite，去 ANSI 后每帧成孤立短行
-        // "di", "*dn", "Fid", "lg", "n", "*g…" 等均符合此条件
-        // 保留含数字（选项编号）或中文的短串，避免误删选项内容
-        if (t.length() <= 4 && !t.contains(" ") && !t.matches(".*[\\d\\u4E00-\\u9FFF].*")) return true;
-
-        return false;
-    }
-
-    /**
-     * 取 baseline 行之后的所有新行，拼接为回复文本。
-     */
-    private String extractDelta(String filtered) {
-        if (filtered.isEmpty()) return "";
-        String[] lines = filtered.split("\n", -1);
-        if (lines.length <= mBaselineLineCount) return "";
-
-        StringBuilder sb = new StringBuilder();
-        for (int i = mBaselineLineCount; i < lines.length; i++) {
-            String t = lines[i].trim();
-            if (!t.isEmpty()) sb.append(t).append("\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private int lineCount(String filtered) {
-        if (filtered.isEmpty()) return 0;
-        return filtered.split("\n", -1).length;
-    }
-
-    // =========================================================================
-    // 辅助
-    // =========================================================================
 
     private void scrollToBottom() {
         mRecycler.post(() -> {

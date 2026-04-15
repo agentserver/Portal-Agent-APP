@@ -76,13 +76,13 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
         mStore.setActiveId(entry.id);
         mAdapter.setActiveId(entry.id);
 
-        // 写入 Ubuntu ~/.profile 并在当前 session export
+        // 直接用 Java 文件 I/O 写入 ubuntu ~/.bashrc，不发任何终端命令
         TermuxActivity a = act();
         if (a != null) {
-            a.setActiveApiKey(entry.value);
-            Toast.makeText(getContext(), "已设为当前 Key 并写入环境变量", Toast.LENGTH_SHORT).show();
+            a.setActiveApiKey(entry.value, entry.baseUrl);
+            Toast.makeText(getContext(), "已设为当前 Key", Toast.LENGTH_SHORT).show();
         } else {
-            Toast.makeText(getContext(), "已记录，终端未连接暂不写入", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getContext(), "已记录", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -121,22 +121,31 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
         layout.addView(etAlias);
 
         EditText etKey = new EditText(requireContext());
-        etKey.setHint("API Key（sk-ant-...）");
+        etKey.setHint("API Key");
         etKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         etKey.setSingleLine(true);
         layout.addView(etKey);
+
+        EditText etBaseUrl = new EditText(requireContext());
+        etBaseUrl.setHint("API Base URL（留空 = 官方；机构用户填入网关地址）");
+        etBaseUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        etBaseUrl.setSingleLine(true);
+        // 默认填机构网关，用户可清空换成官方
+        etBaseUrl.setText("https://code.ai.cs.ac.cn");
+        layout.addView(etBaseUrl);
 
         new AlertDialog.Builder(requireContext())
             .setTitle("添加 API Key")
             .setView(layout)
             .setPositiveButton("保存", (d, w) -> {
-                String alias = etAlias.getText().toString().trim();
-                String key   = etKey.getText().toString().trim();
+                String alias   = etAlias.getText().toString().trim();
+                String key     = etKey.getText().toString().trim();
+                String baseUrl = etBaseUrl.getText().toString().trim();
                 if (key.isEmpty()) {
                     Toast.makeText(getContext(), "Key 不能为空", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                ApiKeyStore.Entry entry = mStore.add(alias, key);
+                ApiKeyStore.Entry entry = mStore.add(alias, key, baseUrl);
                 mEntries.add(entry);
                 mAdapter.notifyItemInserted(mEntries.size() - 1);
                 updateCount();

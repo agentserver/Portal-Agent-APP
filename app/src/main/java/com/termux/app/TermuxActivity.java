@@ -1092,18 +1092,70 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             mTermuxTerminalSessionActivityClient.addNewSession(false, null);
     }
 
+    /** 获取 session 0（ubuntu bash）对应的 TerminalSession。 */
+    private TerminalSession getFirstSession() {
+        if (mTermuxService == null) return null;
+        java.util.List<com.termux.shared.termux.shell.command.runner.terminal.TermuxSession> sessions =
+                mTermuxService.getTermuxSessions();
+        if (sessions == null || sessions.isEmpty()) return null;
+        return sessions.get(0).getTerminalSession();
+    }
+
+    /** 向 session 0（ubuntu bash）写入文本，供 Chat UI 发送 claude -p 命令。 */
+    public void sendChatInput(String text) {
+        TerminalSession s = getFirstSession();
+        if (s != null) s.write(text);
+    }
+
+    /** 读取 session 0 最近 maxLines 行的原始 PTY 输出，供 Chat UI 解析 JSONL。 */
+    public String getChatTerminalLines(int maxLines) {
+        TerminalSession s = getFirstSession();
+        if (s == null) return "";
+        String raw = s.getRawOutput();
+        if (raw == null || raw.isEmpty()) return "";
+        String[] lines = raw.split("\n", -1);
+        int start = Math.max(0, lines.length - maxLines);
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < lines.length; i++) {
+            sb.append(lines[i]);
+            if (i < lines.length - 1) sb.append("\n");
+        }
+        return sb.toString();
+    }
+
     /**
-     * 将指定 API Key 设为当前激活：
-     * 1. 写入 Ubuntu ~/.profile（持久化）
-     * 2. 在当前终端 session 中 export（立即生效）
-     * Claude API Key 仅含字母/数字/连字符，单引号包裹安全。
+     * 将 API Key（和可选的 Base URL）直接写入 ubuntu 的 ~/.bashrc。
+     * 使用 Java File I/O，不向任何终端 session 发送命令。
+     * @param key     ANTHROPIC_API_KEY 值
+     * @param baseUrl ANTHROPIC_BASE_URL 值，空字符串表示使用官方默认（不写入）
      */
-    public void setActiveApiKey(String key) {
-        // 清除 ~/.profile 中旧的 ANTHROPIC_API_KEY 行，追加新行，并在当前 session export
-        String cmd = "sed -i '/ANTHROPIC_API_KEY/d' ~/.profile 2>/dev/null"
-                   + " && echo \"export ANTHROPIC_API_KEY='" + key + "'\" >> ~/.profile"
-                   + " && export ANTHROPIC_API_KEY='" + key + "'\n";
-        sendTerminalInput(cmd);
+    public void setActiveApiKey(String key, String baseUrl) {
+        try {
+            String filesDir = getApplicationContext().getFilesDir().getAbsolutePath();
+            java.io.File bashrcFile = new java.io.File(
+                filesDir + "/usr/var/lib/proot-distro/installed-rootfs/ubuntu/root/.bashrc");
+            if (!bashrcFile.exists()) return;
+
+            java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
+            String content = new String(java.nio.file.Files.readAllBytes(bashrcFile.toPath()), utf8);
+
+            // 删除旧的 ANTHROPIC_* 行
+            StringBuilder sb = new StringBuilder();
+            for (String line : content.split("\n", -1)) {
+                if (!line.contains("ANTHROPIC_API_KEY") && !line.contains("ANTHROPIC_BASE_URL"))
+                    sb.append(line).append("\n");
+            }
+            String trimmed = sb.toString().replaceAll("\n{2,}$", "\n");
+            StringBuilder newContent = new StringBuilder(trimmed);
+            newContent.append("export ANTHROPIC_API_KEY='").append(key).append("'\n");
+            if (baseUrl != null && !baseUrl.isEmpty()) {
+                newContent.append("export ANTHROPIC_BASE_URL='").append(baseUrl).append("'\n");
+            }
+
+            java.nio.file.Files.write(bashrcFile.toPath(), newContent.toString().getBytes(utf8));
+        } catch (java.io.IOException e) {
+            Logger.logError(LOG_TAG, "setActiveApiKey: " + e.getMessage());
+        }
     }
 
 
