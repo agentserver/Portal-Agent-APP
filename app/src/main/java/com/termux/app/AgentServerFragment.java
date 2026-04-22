@@ -155,7 +155,10 @@ public class AgentServerFragment extends Fragment {
             " do [ \"$_p\" != \"$$\" ] && kill \"$_p\" 2>/dev/null; done; sleep 1\n" +
             "> '" + logFile + "'\n" +          // 清空旧日志，避免历史内容干扰状态检测
             "echo '[*] 正在启动 AgentServer...'\n" +
-            "nohup '" + pdBin + "' login --user " + PROOT_USER + " ubuntu -- agentserver " + agentArgs +
+            // bash -c 包裹：source .bashrc 使 ANTHROPIC_API_KEY 等环境变量生效
+            // proot-distro 直接执行命令不走 login shell，env var 不会自动注入
+            "nohup '" + pdBin + "' login --user " + PROOT_USER + " ubuntu -- bash -c" +
+            " \". /home/claude/.profile 2>/dev/null; . /home/claude/.bashrc 2>/dev/null; exec agentserver " + agentArgs + "\"" +
             " >> '" + logFile + "' 2>&1 &\n" +
             "AS_PID=$!\n" +
             "echo '[*] 等待启动（5 秒）...'\n" +
