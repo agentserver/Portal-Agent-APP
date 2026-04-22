@@ -101,10 +101,10 @@ public class AgentServerFragment extends Fragment {
             "if ! command -v proot-distro >/dev/null 2>&1; then\n" +
             "  echo '[!] proot-distro 未找到，Ubuntu 环境尚未初始化'; exit 1\n" +
             "fi\n" +
-            "if ! proot-distro login ubuntu --user " + PROOT_USER + " -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
+            "if ! proot-distro login --user " + PROOT_USER + " ubuntu -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
             "  echo '[!] AgentServer 未安装'; exit 1\n" +
             "fi\n" +
-            "echo \"版本: $(proot-distro login ubuntu --user " + PROOT_USER + " -- agentserver version 2>/dev/null)\"\n" +
+            "echo \"版本: $(proot-distro login --user " + PROOT_USER + " ubuntu -- agentserver version 2>/dev/null)\"\n" +
             "echo ''\n" +
             "if pgrep -f 'agentserver' >/dev/null 2>&1; then\n" +
             "  echo '[*] Agent 运行中'\n" +
@@ -153,7 +153,7 @@ public class AgentServerFragment extends Fragment {
             "pkill -f 'agentserver claudecode' 2>/dev/null; sleep 1\n" +
             "> '" + logFile + "'\n" +          // 清空旧日志，避免历史内容干扰状态检测
             "echo '[*] 正在启动 AgentServer...'\n" +
-            "nohup '" + pdBin + "' login ubuntu --user " + PROOT_USER + " -- agentserver " + agentArgs +
+            "nohup '" + pdBin + "' login --user " + PROOT_USER + " ubuntu -- agentserver " + agentArgs +
             " >> '" + logFile + "' 2>&1 &\n" +
             "AS_PID=$!\n" +
             "echo '[*] 等待启动（5 秒）...'\n" +
@@ -299,10 +299,9 @@ public class AgentServerFragment extends Fragment {
                 (mLastSandboxId.isEmpty() ? "" : "（沙盒: " + mLastSandboxId.substring(0, 8) + "...）"));
         } else if (mRetryWithoutResume) {
             mRetryWithoutResume = false;
-            setStatus("● 重试中", "#F57C00");
-            setInfo("沙盒 token 已过期，正在重新创建连接...");
-            appendLog("\n[*] 沙盒 token 过期（401），自动重新创建沙盒连接...\n");
-            post(this::doConnect);
+            setStatus("● Token 已过期", "#F57C00");
+            setInfo("沙盒 token 已过期，旧 ID 已清除，请点击「连接」重新创建沙盒");
+            appendLog("\n[!] 沙盒 token 过期（401），已清除旧 ID，请重新点击「连接」\n");
         } else {
             setStatus("● 已安装", "#555555");
             setInfo("Agent 进程已启动，但未检测到 tunnel 连接");
