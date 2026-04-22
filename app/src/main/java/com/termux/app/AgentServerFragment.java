@@ -30,6 +30,7 @@ import java.util.function.Consumer;
 public class AgentServerFragment extends Fragment {
 
     private static final String PREFS_NAME        = "agentserver_config";
+    private static final String PROOT_USER        = "claude";  // non-root user inside Ubuntu proot
     private static final String KEY_SERVER_URL    = "server_url";
     private static final String KEY_SANDBOX_CODE  = "sandbox_code";
     private static final String KEY_DEVICE_NAME   = "device_name";
@@ -100,10 +101,10 @@ public class AgentServerFragment extends Fragment {
             "if ! command -v proot-distro >/dev/null 2>&1; then\n" +
             "  echo '[!] proot-distro 未找到，Ubuntu 环境尚未初始化'; exit 1\n" +
             "fi\n" +
-            "if ! proot-distro login ubuntu -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
+            "if ! proot-distro login ubuntu --user " + PROOT_USER + " -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
             "  echo '[!] AgentServer 未安装'; exit 1\n" +
             "fi\n" +
-            "echo \"版本: $(proot-distro login ubuntu -- agentserver version 2>/dev/null)\"\n" +
+            "echo \"版本: $(proot-distro login ubuntu --user " + PROOT_USER + " -- agentserver version 2>/dev/null)\"\n" +
             "echo ''\n" +
             "if pgrep -f 'agentserver' >/dev/null 2>&1; then\n" +
             "  echo '[*] Agent 运行中'\n" +
@@ -152,7 +153,7 @@ public class AgentServerFragment extends Fragment {
             "pkill -f 'agentserver claudecode' 2>/dev/null; sleep 1\n" +
             "> '" + logFile + "'\n" +          // 清空旧日志，避免历史内容干扰状态检测
             "echo '[*] 正在启动 AgentServer...'\n" +
-            "nohup '" + pdBin + "' login ubuntu -- agentserver " + agentArgs +
+            "nohup '" + pdBin + "' login ubuntu --user " + PROOT_USER + " -- agentserver " + agentArgs +
             " >> '" + logFile + "' 2>&1 &\n" +
             "AS_PID=$!\n" +
             "echo '[*] 等待启动（5 秒）...'\n" +

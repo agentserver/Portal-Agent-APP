@@ -147,6 +147,8 @@ public class AutoAgentServerManager {
                 "  _b=$(find \"$_t\" -name agentserver -type f | head -1)\n" +
                 "  [ -n \"$_b\" ] || { rm -rf \"$_t\"; exit 0; }\n" +
                 "  cp \"$_b\" /usr/local/bin/agentserver && chmod +x /usr/local/bin/agentserver\n" +
+                "  id claude >/dev/null 2>&1 || useradd -m -s /bin/bash claude\n" +
+                "  _cc=$(which claude 2>/dev/null); [ -n \"$_cc\" ] && [ ! -e /usr/local/bin/claude ] && ln -sf \"$_cc\" /usr/local/bin/claude\n" +
                 "  rm -rf \"$_t\"\n" +
                 "  echo '[*] AgentServer updated'\n" +
                 "INNER\n";
@@ -256,6 +258,16 @@ public class AutoAgentServerManager {
         s.append("    return 1 2>/dev/null || exit 1\n");
         s.append("fi\n");
         s.append("echo \"[*] AgentServer $(agentserver version 2>/dev/null || echo '') 安装成功\"\n\n");
+
+        // ── 创建非 root 用户 claude，供 agentserver 以非 root 权限运行 ──────
+        s.append("echo '[3/3] 配置非 root 运行用户...'\n");
+        s.append("id claude >/dev/null 2>&1 || useradd -m -s /bin/bash claude\n");
+        // 确保 claude CLI 二进制在 /usr/local/bin，对 claude 用户可见
+        s.append("_claude_cli=$(which claude 2>/dev/null)\n");
+        s.append("if [ -n \"$_claude_cli\" ] && [ ! -e /usr/local/bin/claude ]; then\n");
+        s.append("    ln -sf \"$_claude_cli\" /usr/local/bin/claude\n");
+        s.append("fi\n");
+        s.append("echo '[*] 运行用户 claude 已就绪'\n\n");
 
         // ── 使用说明（OAuth 流程，不能在脚本内交互完成）────────────────────
         s.append("echo ''\n");
