@@ -16,6 +16,9 @@
     <string name="application_name">&TERMUX_APP_NAME;</string>
     <string name="shared_user_label">&TERMUX_APP_NAME; user</string>
 
+    <!-- Android MCP Accessibility Service -->
+    <string name="mcp_accessibility_service_description">允许 Claude Code 通过 MCP 读取屏幕内容并执行点击、输入、滑动等 UI 操作。</string>
+
 
 
     <!-- Termux RUN_COMMAND permission -->

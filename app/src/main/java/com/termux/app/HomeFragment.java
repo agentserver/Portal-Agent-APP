@@ -74,6 +74,7 @@ public class HomeFragment extends Fragment {
     private TextView mSessionTitle;
     private EditText mInputEdit;
     private TextView mScreenCaptureStatus;
+    private TextView mAccessibilityStatus;
 
     // ── 历史会话抽屉 ──────────────────────────────────────────────────────
     private SessionStore               mSessionStore;
@@ -124,6 +125,7 @@ public class HomeFragment extends Fragment {
         mSessionTitle        = view.findViewById(R.id.home_session_title);
         mInputEdit           = view.findViewById(R.id.home_input_edit);
         mScreenCaptureStatus = view.findViewById(R.id.screen_capture_status);
+        mAccessibilityStatus = view.findViewById(R.id.accessibility_status);
 
         // ── 历史会话抽屉 ──────────────────────────────────────────────────
         mSessionStore   = new SessionStore(requireContext());
@@ -198,6 +200,15 @@ public class HomeFragment extends Fragment {
             mMessages.clear();
             mAdapter.notifyDataSetChanged();
             updateSessionTitle(null);
+        });
+
+        // 无障碍权限按钮：跳转系统无障碍设置页
+        MaterialButton btnAccessibility = view.findViewById(R.id.btn_accessibility);
+        btnAccessibility.setOnClickListener(v -> {
+            android.content.Intent intent = new android.content.Intent(
+                android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            requireContext().startActivity(intent);
         });
 
         // 截图授权按钮：已授权时点击撤销，未授权时弹系统对话框
@@ -537,6 +548,7 @@ public class HomeFragment extends Fragment {
                                  active ? 0xFF2E7D32    : 0xFF888888);
                 }
                 updateScreenCaptureStatus(com.termux.app.mcp.ScreenCaptureService.isRunning());
+                updateAccessibilityStatus(com.termux.app.mcp.McpAccessibilityService.isRunning());
                 mHandler.postDelayed(this, 2000);
             }
         };
@@ -586,6 +598,22 @@ public class HomeFragment extends Fragment {
         if (mStatusText != null) {
             mStatusText.setText(text);
             mStatusText.setTextColor(color);
+        }
+    }
+
+    private void updateAccessibilityStatus(boolean enabled) {
+        if (mAccessibilityStatus == null) return;
+        if (enabled) {
+            mAccessibilityStatus.setText("● 无障碍: 已启用");
+            mAccessibilityStatus.setTextColor(0xFF2E7D32);
+        } else {
+            mAccessibilityStatus.setText("● 无障碍: 未启用");
+            mAccessibilityStatus.setTextColor(0xFF888888);
+        }
+        View root = getView();
+        if (root != null) {
+            MaterialButton b = root.findViewById(R.id.btn_accessibility);
+            if (b != null) b.setText(enabled ? "无障碍设置" : "开启无障碍");
         }
     }
 

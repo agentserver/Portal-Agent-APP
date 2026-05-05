@@ -8,7 +8,10 @@ import com.termux.app.mcp.McpHttpServer;
 import com.termux.app.mcp.tools.AndroidStatusTool;
 import com.termux.app.mcp.tools.CameraTool;
 import com.termux.app.mcp.tools.FileTool;
+import com.termux.app.mcp.tools.AppTool;
 import com.termux.app.mcp.tools.ScreenCaptureTool;
+import com.termux.app.mcp.tools.UiTool;
+import com.termux.app.mcp.tools.UiTreeTool;
 
 public class AutoTaskCoordinator {
 
@@ -43,6 +46,14 @@ public class AutoTaskCoordinator {
         mMcpHttpServer.registerTool(new FileTool(FileTool.Kind.LIST));
         mMcpHttpServer.registerTool(new FileTool(FileTool.Kind.READ));
         mMcpHttpServer.registerTool(new ScreenCaptureTool());
+        // Phase 4: UI control via AccessibilityService
+        mMcpHttpServer.registerTool(new UiTool(UiTool.Kind.TAP));
+        mMcpHttpServer.registerTool(new UiTool(UiTool.Kind.SWIPE));
+        mMcpHttpServer.registerTool(new UiTool(UiTool.Kind.CLICK_TEXT));
+        mMcpHttpServer.registerTool(new UiTool(UiTool.Kind.INPUT_TEXT));
+        mMcpHttpServer.registerTool(new UiTreeTool());
+        mMcpHttpServer.registerTool(new AppTool(AppTool.Kind.OPEN));
+        mMcpHttpServer.registerTool(new AppTool(AppTool.Kind.GET_ACTIVITY));
         mMcpHttpServer.start();
         // 后台生成 capabilities.json，供 Ubuntu 里的 Claude Code 读取设备能力快照
         new CapabilitiesManager(activity).generateAsync();

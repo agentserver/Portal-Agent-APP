@@ -156,6 +156,38 @@
 
             </LinearLayout>
 
+            <!-- 无障碍权限行 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/accessibility_status"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="● 无障碍: 未启用"
+                    android:textColor="#888888"
+                    android:textSize="12sp"
+                    android:gravity="center_vertical" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_accessibility"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:text="开启无障碍"
+                    android:textColor="#1565C0"
+                    android:textSize="11sp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    app:strokeColor="#1565C0" />
+
+            </LinearLayout>
+
             <!-- 截图权限行 -->
             <LinearLayout
                 android:layout_width="match_parent"
