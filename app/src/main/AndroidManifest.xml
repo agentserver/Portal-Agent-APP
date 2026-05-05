@@ -233,7 +233,7 @@
             android:exported="false" />
 
         <service
-            android:name=".mcp.ScreenCaptureService"
+            android:name=".app.mcp.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
