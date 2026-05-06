@@ -200,7 +200,7 @@ public class HomeFragment extends Fragment {
                         + (startBaseUrl.isEmpty() ? "" : " ANTHROPIC_BASE_URL='" + urlEsc + "'")
                         + " claude";
                 a.addNewSessionFromHome();
-                terminal("proot-distro login ubuntu -- sh -c '" + startCmd + "'\r");
+                terminal("proot-distro login ubuntu --user claude -- sh -c '" + startCmd + "'\r");
             }
         });
 
@@ -331,7 +331,7 @@ public class HomeFragment extends Fragment {
                         + " claude -p --output-format stream-json --verbose"
                         + sessionFlag;
 
-                ProcessBuilder pb = new ProcessBuilder(BASH, PROOT_D, "login", "ubuntu", "--", "sh", "-c", claudeCmd);
+                ProcessBuilder pb = new ProcessBuilder(BASH, PROOT_D, "login", "ubuntu", "--user", "claude", "--", "sh", "-c", claudeCmd);
                 setupEnv(pb.environment(), finalKey, finalBaseUrl);
                 pb.redirectErrorStream(false);
 
@@ -513,10 +513,10 @@ public class HomeFragment extends Fragment {
                     + " && cp /tmp/.upload_src ~/uploads/'" + finalName + "'"
                     + " && echo ~/uploads/'" + finalName + "'";
 
-                // No --user: defaults to root in proot, which matches how sendOrConfirm
-                // runs claude -p (also root, cwd /root). File lands in /root/uploads/
-                // which is inside Claude Code's trusted directory tree.
+                // --user claude: 与 sendOrConfirm 保持一致（claude -p 以 claude 用户运行）
+                // ~ 展开为 /home/claude/，文件落在 /home/claude/uploads/
                 ProcessBuilder pb = new ProcessBuilder(BASH, PROOT_D, "login", "ubuntu",
+                    "--user", "claude",
                     "--bind", cacheFile.getAbsolutePath() + ":/tmp/.upload_src",
                     "--", "sh", "-c", shell);
                 setupEnv(pb.environment(), "", "");

@@ -140,19 +140,20 @@ public class AutoUbuntuManager {
      *        而 HomeFragment 以 root 运行 claude -p，读的是 /root/.claude/）
      */
     private void injectClaudeMd() {
-        File rootfsRoot = new File(UbuntuSnapshotManager.UBUNTU_ROOTFS + "/root");
-        if (!rootfsRoot.isDirectory()) return;
+        // claude -p 以 --user claude 运行，home 是 /home/claude/
+        File claudeHome = new File(UbuntuSnapshotManager.UBUNTU_ROOTFS + "/home/claude");
+        if (!claudeHome.isDirectory()) return;
 
-        // 1. CLAUDE.md
-        writeFile(new File(rootfsRoot, "CLAUDE.md"), buildClaudeMdContent());
+        // 1. CLAUDE.md — Claude Code 读取当前工作目录的 CLAUDE.md
+        writeFile(new File(claudeHome, "CLAUDE.md"), buildClaudeMdContent());
 
         // 2. /phone skill
-        File commandsDir = new File(rootfsRoot, ".claude/commands");
+        File commandsDir = new File(claudeHome, ".claude/commands");
         commandsDir.mkdirs();
         writeFile(new File(commandsDir, "phone.md"), buildPhoneSkillContent());
 
-        // 3. settings.json MCP 注册（JSON merge，不破坏现有配置）
-        injectMcpSettings(new File(rootfsRoot, ".claude"));
+        // 3. settings.json — 与 AutoClaudeManager 的 su -l claude claude mcp add 一致
+        injectMcpSettings(new File(claudeHome, ".claude"));
     }
 
     private static void writeFile(File dest, String content) {
