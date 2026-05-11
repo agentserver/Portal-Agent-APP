@@ -355,9 +355,7 @@ public class HomeFragment extends Fragment {
         MaterialButton btnHistory      = view.findViewById(R.id.btn_history);
         MaterialButton btnSend         = view.findViewById(R.id.home_send_btn);
         MaterialButton btnEnter        = view.findViewById(R.id.btn_enter);
-        MaterialButton btnStart        = view.findViewById(R.id.btn_start_claude);
         MaterialButton btnStop         = view.findViewById(R.id.btn_stop_claude);
-        MaterialButton btnRestart      = view.findViewById(R.id.btn_restart_claude);
         MaterialButton btnNewSession   = view.findViewById(R.id.btn_new_session);
         MaterialButton btnAttach       = view.findViewById(R.id.btn_attach_file);
         MaterialButton btnClearAttach  = view.findViewById(R.id.btn_clear_attachment);
@@ -372,41 +370,10 @@ public class HomeFragment extends Fragment {
         // ⏎ 向当前可见 session 发送回车
         btnEnter.setOnClickListener(v -> terminal("\r"));
 
-        // "启动"：新建 session，运行交互式 Claude
-        btnStart.setOnClickListener(v -> {
-            TermuxActivity a = act();
-            if (a != null) {
-                ApiKeyStore store2   = new ApiKeyStore(requireContext());
-                String activeId2     = store2.getActiveId();
-                String startKey      = "";
-                String startBaseUrl  = "";
-                if (activeId2 != null) {
-                    for (ApiKeyStore.Entry e : store2.loadAll()) {
-                        if (e.id.equals(activeId2)) { startKey = e.value; startBaseUrl = e.baseUrl; break; }
-                    }
-                }
-                String keyEsc = startKey.replace("'", "'\\''");
-                String urlEsc = startBaseUrl.replace("'", "'\\''");
-                String startCmd = "ANTHROPIC_API_KEY='" + keyEsc + "'"
-                        + (startBaseUrl.isEmpty() ? "" : " ANTHROPIC_BASE_URL='" + urlEsc + "'")
-                        + " claude";
-                a.addNewSessionFromHome();
-                terminal("proot-distro login ubuntu --user claude -- sh -c '" + startCmd + "'\r");
-            }
-        });
-
-        // "停止"：终止 claude -p 子进程
+        // "打断"：杀当前 claude -p 子进程；mSessionStarted 不变，下条消息 --continue 同会话
         btnStop.setOnClickListener(v -> stopClaudeProcess());
 
-        // "重启"：停止子进程，清除对话历史标志
-        btnRestart.setOnClickListener(v -> {
-            stopClaudeProcess();
-            mSessionStarted = false;
-            mAdapter.addMessage(ChatMessage.assistant("— 对话已重置 —"));
-            scrollToBottom();
-        });
-
-        // "新建会话"：清除所有会话状态，下次发送开启全新对话
+        // "新建对话"：清空所有状态 + 清空 UI，开始全新对话
         btnNewSession.setOnClickListener(v -> {
             stopClaudeProcess();
             mSessionStarted   = false;
@@ -1013,7 +980,8 @@ public class HomeFragment extends Fragment {
         File f = new File(CLAUDE_PROJECTS_DIR + "/" + sessionId + ".jsonl");
         if (!f.exists()) return null;
         List<ChatMessage> result = new ArrayList<>();
-        try (BufferedReader br = new BufferedReader(new java.io.FileReader(f))) {
+        try (BufferedReader br = new BufferedReader(new java.io.InputStreamReader(
+                new java.io.FileInputStream(f), java.nio.charset.StandardCharsets.UTF_8))) {
             String line;
             while ((line = br.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
@@ -1406,14 +1374,24 @@ public class HomeFragment extends Fragment {
         }
         if (f.length() <= mAgentPipeOffset) return;
         long start = mAgentPipeOffset;
+        // 注意：RandomAccessFile.readLine 用 Latin-1 解码字节（Java 历史遗留），中文 UTF-8
+        // 字节会被解成乱码。这里手动按字节读取、按 \n 分行、用 UTF-8 显式解码。
         try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
             raf.seek(mAgentPipeOffset);
-            String line;
-            while ((line = raf.readLine()) != null) {
-                mAgentPipeOffset = raf.getFilePointer();
-                if (line.trim().isEmpty()) continue;
-                handleAgentPipeLine(line);
+            java.io.ByteArrayOutputStream lineBuf = new java.io.ByteArrayOutputStream();
+            int b;
+            while ((b = raf.read()) != -1) {
+                if (b == '\n') {
+                    String line = new String(lineBuf.toByteArray(),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                    lineBuf.reset();
+                    mAgentPipeOffset = raf.getFilePointer();
+                    if (!line.trim().isEmpty()) handleAgentPipeLine(line);
+                } else if (b != '\r') {
+                    lineBuf.write(b);
+                }
             }
+            // 末尾未结束的部分留到下次读取，offset 保持在最后一个完整行之后
         } catch (Exception ignored) {}
         if (mAgentPipeOffset != start && getContext() != null) {
             getContext()

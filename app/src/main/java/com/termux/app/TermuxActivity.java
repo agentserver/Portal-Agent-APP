@@ -161,6 +161,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     private boolean mIsVisible;
 
     /**
+     * Activity 是否在前台。供进程内其他组件（如 FloatingStatusService）跨进程边界外的简单查询。
+     * 只在主线程读写（onStart/onStop 都在主线程），volatile 保证可见性。
+     */
+    public static volatile boolean sActivityForeground = false;
+
+    /**
      * If onResume() was called after onCreate().
      */
     private boolean mIsOnResumeAfterOnCreate = false;
@@ -303,6 +309,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mIsInvalidState) return;
 
         mIsVisible = true;
+        sActivityForeground = true;
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onStart();
@@ -360,6 +367,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mIsInvalidState) return;
 
         mIsVisible = false;
+        sActivityForeground = false;
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onStop();

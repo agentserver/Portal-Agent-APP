@@ -98,25 +98,12 @@
                 android:layout_marginBottom="4dp">
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btn_start_claude"
-                    android:layout_width="0dp"
-                    android:layout_height="32dp"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="2dp"
-                    android:text="启动"
-                    android:textSize="12sp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:backgroundTint="#4CAF50"
-                    android:textColor="@android:color/white" />
-
-                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_stop_claude"
                     android:layout_width="0dp"
                     android:layout_height="32dp"
                     android:layout_weight="1"
-                    android:layout_marginEnd="2dp"
-                    android:text="停止"
+                    android:layout_marginEnd="4dp"
+                    android:text="打断"
                     android:textSize="12sp"
                     android:insetTop="0dp"
                     android:insetBottom="0dp"
@@ -124,24 +111,11 @@
                     android:textColor="@android:color/white" />
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btn_restart_claude"
-                    android:layout_width="0dp"
-                    android:layout_height="32dp"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="2dp"
-                    android:text="重启"
-                    android:textSize="12sp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:backgroundTint="#FF9800"
-                    android:textColor="@android:color/white" />
-
-                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btn_new_session"
                     android:layout_width="0dp"
                     android:layout_height="32dp"
                     android:layout_weight="1"
-                    android:text="新建"
+                    android:text="新建对话"
                     android:textSize="12sp"
                     android:insetTop="0dp"
                     android:insetBottom="0dp"

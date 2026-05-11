@@ -33,7 +33,8 @@ public class FloatingStatusService extends Service {
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
     // ── 显示控制状态（决定 mFloatingView 可见性）────────────────────────────
-    private          boolean mInBackground = false;
+    // 注：是否在后台直接读 TermuxActivity.sActivityForeground，避免 Service 自己缓存的状态
+    // 与 Activity 真实生命周期不同步（早期版本用 mInBackground 缓存，存在前台仍显示的 bug）
     private static volatile boolean sIsBusy      = false;
     private static volatile boolean sUserClosed  = false;
 
@@ -110,12 +111,9 @@ public class FloatingStatusService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_STICKY;
         String action = intent.getAction();
-        if (ACTION_SHOW.equals(action)) {
-            mInBackground = true;
+        // SHOW/HIDE 现在只触发一次重新评估；真实前后台状态以 TermuxActivity.sActivityForeground 为准
+        if (ACTION_SHOW.equals(action) || ACTION_HIDE.equals(action)) {
             applyPending();
-            updateVisibility();
-        } else if (ACTION_HIDE.equals(action)) {
-            mInBackground = false;
             updateVisibility();
         }
         return START_STICKY;
@@ -150,7 +148,8 @@ public class FloatingStatusService extends Service {
 
     private void updateVisibility() {
         if (mFloatingView == null) return;
-        boolean shouldShow = mInBackground && sIsBusy && !sUserClosed;
+        boolean inBackground = !TermuxActivity.sActivityForeground;
+        boolean shouldShow   = inBackground && sIsBusy && !sUserClosed;
         mFloatingView.setVisibility(shouldShow ? View.VISIBLE : View.GONE);
     }
 }

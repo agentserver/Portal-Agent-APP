@@ -138,9 +138,10 @@ android {
     }
 
     // AGP 9.x 用 androidResources 替代废弃的 aaptOptions
-    // 告诉打包器不要对已压缩格式二次压缩，避免 BytesSource.readAllBytes 导致 OOM
+    // 告诉打包器不要对已压缩格式二次压缩，避免 deflate 整个 171MB 的 tar.xz 导致 OOM
+    // 注意：AGP 的 noCompress 用文件名后缀做匹配，**不要带前导点**（'xz' 而不是 '.xz'）
     androidResources {
-        noCompress '.gz', '.tgz', '.xz', '.tar', '.tar.gz', '.tar.xz', '.zip', '.br'
+        noCompress 'gz', 'tgz', 'xz', 'tar', 'zip', 'br', 'apk', 'jpg', 'jpeg', 'png', 'webp'
     }
 
     applicationVariants.all { variant ->
