@@ -43,8 +43,8 @@
 打开底部导航 **API Key** 页：
 
 - 点击 **添加新 Key**
-- 别名：随便取（如 `Anthropic` 或 `DeepSeek`）
-- API Key：你的 `sk-ant-xxx`（Anthropic）或 `sk-xxx`（DeepSeek/其他兼容服务）
+- 别名：随便取
+- API Key：你的 `sk-ant-xxx`（Anthropic）或其他可以api key
 - Base URL：
   - 留空 = 走CLaude官方 Anthropic API
   - DeepSeek 填 `https://api.deepseek.com/anthropic`
