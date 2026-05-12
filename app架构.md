@@ -184,15 +184,15 @@ proot-distro login ubuntu
   -- sh -c "mkdir -p ~/uploads && cp /tmp/.upload_src ~/uploads/<name>
             && echo ~/uploads/<name>"
         │
-        │  以 `--user claude` 运行，~/uploads 展开为 /home/claude/uploads/
-        │  与 claude -p 的运行用户一致，且路径在容器内可直接读
+        │  ~/uploads/ = /root/uploads/（proot root 用户的 home）
+        │  与 claude -p 运行环境一致，在受信目录树内
         │
         ▼
-回显路径存入 mAttachmentPath（如 /home/claude/uploads/photo.png）
+回显路径存入 mAttachmentPath（如 /root/uploads/photo.png）
         │
         ▼
 发送时拼入 prompt：
-  "[附件: /home/claude/uploads/photo.png]\n<用户文字>"
+  "[附件: /root/uploads/photo.png]\n<用户文字>"
         │
         ▼
 Claude Code 用 Read 工具直接读取该路径
@@ -212,17 +212,14 @@ AutoTaskCoordinator
         └─ AutoUbuntuManager
                 │
                 ▼
-           检查 Ubuntu rootfs 是否存在/健康（claude --version）
+           检查 proot-distro 是否已安装 ubuntu
                 │
           ┌─────┴─────┐
-        已就绪        未就绪/缺失
+        已安装        未安装
           │              │
           │              ▼
-          │        优先走快照部署（UbuntuSnapshotManager）
-          │          1) APK 内置快照（离线，可选）
-          │          2) GitHub Release 下载快照（默认）
-          │        快照失败再回退：
-          │          3) proot-distro install ubuntu（支持镜像源与 CDN 兜底）
+          │        安装 ubuntu rootfs
+          │        （优先使用 assets 内置，否则从 CDN 下载）
           │              │
           └──────┬───────┘
                  ▼
