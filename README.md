@@ -72,6 +72,7 @@
 - 沙盒 ID：留空 = 自动新建一个；填值 = 复用某个已有沙盒
 - 设备名称：随便取，会显示在上游 Web UI 的沙盒列表
 - 点击「连接」
+- AgentServer派发的任务以dangerously-skip-permissions 运行，不需人工确认。
 
 连接成功后日志区会出现 `tunnel connected (sandbox: ...)`。
 
