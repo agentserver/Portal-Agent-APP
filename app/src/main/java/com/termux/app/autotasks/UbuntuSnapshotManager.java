@@ -31,14 +31,14 @@ public class UbuntuSnapshotManager {
 
     // ── 快照元数据（每次更新快照时同步修改） ──────────────────────────────
     public static final String SNAPSHOT_URL =
-        "https://github.com/Zeta112233/Claude_code_Android_app/releases/download/snapshot-v1/ubuntu-claude-aarch64-20260506.tar.xz";
+        "https://github.com/Zeta112233/Claude_code_Android_app/releases/download/snapshot-v2/ubuntu-claude-aarch64-20260512.tar.xz";
     public static final String SNAPSHOT_SHA256 =
-        "a4ac7948c7f82c5fb9559546ca0f783b938f2e932f165bc6c77d6e790b99b69d";
-    public static final long   SNAPSHOT_BYTES = 178_310_108L; // 实际字节数，用于进度计算
+        "9d84146748aba561286088955e66343c88c078f86179441a1c279d0a9b402bd2";
+    public static final long   SNAPSHOT_BYTES = 208_834_812L; // 实际字节数，用于进度计算
 
     // APK 内置快照 asset 路径（构建时手动放置，不入 git）
     static final String SNAPSHOT_ASSET_NAME =
-        "ubuntu-snapshot/ubuntu-claude-aarch64-20260506.tar.xz";
+        "ubuntu-snapshot/ubuntu-claude-aarch64-20260512.tar.xz";
 
     // ── 路径 ──────────────────────────────────────────────────────────────
     private static final String PREFIX    = TermuxConstants.TERMUX_PREFIX_DIR_PATH;

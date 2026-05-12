@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      SNAPSHOT_RELEASE_TAG: snapshot-v1   # 来自 git tag list 中已存在的 snapshot release
+      SNAPSHOT_RELEASE_TAG: snapshot-v2   # 含 agentserver v0.48.1，2026-05-12 打包
 
     steps:
       - name: Checkout
