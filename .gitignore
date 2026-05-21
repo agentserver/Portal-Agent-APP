@@ -52,3 +52,4 @@ Thumbs.db
 
 # Local dev artifacts
 task.jsonl
+.worktrees/
