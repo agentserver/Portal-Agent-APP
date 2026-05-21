@@ -31,10 +31,10 @@ public class UbuntuSnapshotManager {
 
     // ── 快照元数据（每次更新快照时同步修改） ──────────────────────────────
     public static final String SNAPSHOT_URL =
-        "https://github.com/Zeta112233/Claude_code_Android_app/releases/download/snapshot-v2/ubuntu-claude-aarch64-20260512.tar.xz";
+        "https://github.com/Zeta112233/Claude_code_Android_app/releases/download/snapshot-v3/ubuntu-claude-aarch64-20260521.tar.xz";
     public static final String SNAPSHOT_SHA256 =
-        "9d84146748aba561286088955e66343c88c078f86179441a1c279d0a9b402bd2";
-    public static final long   SNAPSHOT_BYTES = 208_834_812L; // 实际字节数，用于进度计算
+        "cd87105f6ea7c9427693aa5cf4c6063bd4d055b3bf82249cb157b6de7867076d";
+    public static final long   SNAPSHOT_BYTES = 208_145_332L; // 实际字节数，用于进度计算
 
     /** 用于 UI 提示，自动从字节数四舍五入算 MB，避免改快照时漏掉硬编码字符串。 */
     public static final String SNAPSHOT_SIZE_LABEL =
