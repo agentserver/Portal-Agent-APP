@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 工具调用：灰色气泡，标题行 + 可折叠详情 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="start"
+    android:paddingStart="12dp"
+    android:paddingEnd="56dp"
+    android:paddingTop="2dp"
+    android:paddingBottom="2dp">
+
+    <LinearLayout
+        android:id="@+id/tool_container"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/bubble_thinking"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:id="@+id/tool_header"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textColor="#666666"
+            android:textSize="12sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/tool_detail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp"
+            android:textColor="#777777"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:lineSpacingMultiplier="1.3"
+            android:textIsSelectable="true"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</LinearLayout>
