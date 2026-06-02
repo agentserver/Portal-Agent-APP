@@ -58,7 +58,7 @@ public final class ClaudeStreamSession {
     public static synchronized void init(Context appCtx) {
         if (sInstance == null) sInstance = new ClaudeStreamSession(appCtx.getApplicationContext());
     }
-    public static ClaudeStreamSession get(Context ctx) {
+    public static synchronized ClaudeStreamSession get(Context ctx) {
         if (sInstance == null) init(ctx);
         return sInstance;
     }
@@ -79,10 +79,12 @@ public final class ClaudeStreamSession {
     private volatile int      mGeneration      = 0;   // bumps on every kill/spawn
 
     // Turn-local buffers (cleared on each new WAITING_TURN entry / process death)
-    private final Set<String> mEmittedToolUseIds = new HashSet<>();
+    private final Set<String> mEmittedToolUseIds =
+            java.util.Collections.synchronizedSet(new HashSet<>());
     /** tool_use id → 工具名（如 "Bash"）。用于把 tool_result 的不透明 tool_use_id
      *  反查成可读名字，传给 onToolResult 显示。turn 边界清空。 */
-    private final java.util.Map<String, String> mToolNameById = new java.util.HashMap<>();
+    private final java.util.Map<String, String> mToolNameById =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<>());
 
     private final List<Listener> mListeners = new CopyOnWriteArrayList<>();
 
@@ -161,9 +163,13 @@ public final class ClaudeStreamSession {
             return true;
         } catch (Exception e) {
             Log.e(TAG, "spawn failed", e);
+            Process orphan = mProcess;   // capture before null
             mState = State.IDLE;
             mProcess = null;
             mStdinWriter = null;
+            if (orphan != null) {
+                try { orphan.destroyForcibly(); } catch (Throwable ignored) {}
+            }
             emitProcessDied("spawn failed: " + e.getMessage());
             return false;
         }
