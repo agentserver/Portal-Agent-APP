@@ -166,10 +166,6 @@ public class HomeFragment extends Fragment {
     /** 当前捕获到的 Claude session ID（从 type=result 事件提取）。 */
     private String  mCurrentSessionId = null;
 
-    /** 显式恢复某条历史对话时设置（只用一次）；null = 走 mCurrentSessionId 的 --resume，
-     *  或在尚无 id 时退回 --continue / 全新对话。 */
-    private String  mResumeSessionId  = null;
-
     /** 已写入日志文件的条目数（每次 appendChatLog 时自增），用于同步时跳过已知内容。 */
     private int mSyncedLogEntries = 0;
 
@@ -387,7 +383,6 @@ public class HomeFragment extends Fragment {
         btnNewSession.setOnClickListener(v -> {
             mClaudeSession.resetForNewConversation();
             mWaitingResponse  = false;
-            mResumeSessionId  = null;
             mCurrentSessionId = null;
             mMessages.clear();
             mAdapter.notifyDataSetChanged();
@@ -678,23 +673,6 @@ public class HomeFragment extends Fragment {
     }
 
     // =========================================================================
-    // 工具：剥离 ANSI/VT100 转义序列
-    // =========================================================================
-
-    /** 去掉终端控制码，只保留可打印文字。 */
-    private static String stripAnsi(String s) {
-        // ESC [ ... 参数 最终字母  (CSI 序列)
-        s = s.replaceAll("\u001B\\[[0-9;?]*[A-Za-z]", "");
-        // ESC 单字母序列（如 ESC c, ESC M 等）
-        s = s.replaceAll("\u001B[^\\[\\]]", "");
-        // OSC 序列 ESC ] ... BEL/ST
-        s = s.replaceAll("\u001B][^\u0007\u001B]*(\u0007|\u001B\\\\)", "");
-        // 其余控制字符（CR、BEL 等），保留 \n
-        s = s.replaceAll("[\u0000-\u0008\u000B-\u001A\u001C-\u001F\u007F]", "");
-        return s;
-    }
-
-    // =========================================================================
     // 状态轮询（仅用于显示终端 session 活跃状态）
     // =========================================================================
 
@@ -730,7 +708,6 @@ public class HomeFragment extends Fragment {
         mClaudeSession.startWithResume(entry.id);   // kill 当前 + 标记下条 --resume entry.id
         mMessages.clear();
         mAdapter.notifyDataSetChanged();
-        mResumeSessionId  = entry.id;       // 仍保留：本 Fragment 不再使用，但传给 mLastSentText 路径无害
         mCurrentSessionId = entry.id;
         mWaitingResponse  = false;
         updateStatus("● 就绪", 0xFF2E7D32);
