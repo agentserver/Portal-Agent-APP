@@ -15,6 +15,7 @@ import java.util.UUID;
 public class ApiKeyStore {
 
     private static final String PREFS_NAME     = "api_keys_store";
+    private static final String CODEX_PREFS_NAME = "codex_api_keys";
     private static final String K_COUNT        = "count";
     private static final String K_ID           = "id_";
     private static final String K_ALIAS        = "alias_";
@@ -28,7 +29,7 @@ public class ApiKeyStore {
         public final String id;
         public String alias;
         public String value;
-        public String baseUrl;  // ANTHROPIC_BASE_URL，空字符串表示使用官方默认
+        public String baseUrl;  // Provider base URL override; empty string uses provider default.
 
         Entry(String id, String alias, String value, String baseUrl) {
             this.id      = id;
@@ -43,8 +44,16 @@ public class ApiKeyStore {
     private final SharedPreferences mPrefs;
 
     public ApiKeyStore(Context context) {
+        this(context, AssistantProvider.CLAUDE);
+    }
+
+    public ApiKeyStore(Context context, AssistantProvider provider) {
         mPrefs = context.getApplicationContext()
-                        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                        .getSharedPreferences(prefsNameForProvider(provider), Context.MODE_PRIVATE);
+    }
+
+    public static String prefsNameForProvider(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? CODEX_PREFS_NAME : PREFS_NAME;
     }
 
     /** 读取所有条目（顺序与保存顺序一致）。 */

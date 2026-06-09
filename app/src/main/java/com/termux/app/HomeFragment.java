@@ -157,11 +157,19 @@ public class HomeFragment extends Fragment {
     // ── Claude 流式会话（singleton，长驻进程） ─────────────────────────────
     private ClaudeStreamSession             mClaudeSession;
     private ClaudeStreamSession.Listener    mClaudeListener;
+    private ProviderSettingsStore           mProviderStore;
+    private AssistantProvider               mProvider = AssistantProvider.CLAUDE;
+    private CodexExecSession                mCodexSession;
+    private CodexExecSession.Listener       mCodexListener;
+    private volatile int                    mUiGeneration = 0;
+    private volatile int                    mViewGeneration = 0;
+    private volatile boolean                mViewActive = false;
     /** 最近一条用户消息文字，onResult 写 SessionStore preview 时用。 */
     private String mLastSentText = "";
 
     // ── 对话状态 ───────────────────────────────────────────────────────────
     private boolean mWaitingResponse = false;
+    private boolean mTurnOutputAnchored = false;
 
     /** 当前捕获到的 Claude session ID（从 type=result 事件提取）。 */
     private String  mCurrentSessionId = null;
@@ -183,9 +191,8 @@ public class HomeFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        mClaudeSession = ClaudeStreamSession.get(requireContext());
-        mClaudeListener = buildClaudeListener();
-        mClaudeSession.addListener(mClaudeListener);
+        mProviderStore = new ProviderSettingsStore(requireContext());
+        mProvider = mProviderStore.getSelectedProvider();
 
         mDrawerLayout = view.findViewById(R.id.home_drawer_layout);
 
@@ -194,6 +201,7 @@ public class HomeFragment extends Fragment {
         lm.setStackFromEnd(true);
         mRecycler.setLayoutManager(lm);
         mAdapter = new ChatAdapter(mMessages);
+        updateAssistantLabel();
         mRecycler.setAdapter(mAdapter);
 
         mStatusText           = view.findViewById(R.id.home_status_text);
@@ -203,6 +211,8 @@ public class HomeFragment extends Fragment {
         mAccessibilityStatus  = view.findViewById(R.id.accessibility_status);
         mAttachmentPreviewRow = view.findViewById(R.id.attachment_preview_row);
         mAttachmentNameText   = view.findViewById(R.id.attachment_name_text);
+        mSessionTitle.setOnClickListener(v -> showProviderDialog());
+        updateSessionTitle(null);
 
         // ── 抽屉 Tab 栏 ───────────────────────────────────────────────────
         mDrawerFlipper  = view.findViewById(R.id.drawer_flipper);
@@ -295,6 +305,12 @@ public class HomeFragment extends Fragment {
         mSessionAdapter = new SessionAdapter(mSessionEntries, mCurrentSessionId,
             new SessionAdapter.Listener() {
                 @Override public void onSessionSelected(SessionStore.Entry entry) {
+                    if (mProvider != AssistantProvider.CLAUDE) {
+                        Toast.makeText(getContext(),
+                            "历史记录仅适用于 Claude Code，请先切换到 Claude Code",
+                            Toast.LENGTH_SHORT).show();
+                        return;
+                    }
                     resumeSession(entry);
                     mDrawerLayout.closeDrawers();
                 }
@@ -381,11 +397,18 @@ public class HomeFragment extends Fragment {
 
         // "新建对话"：杀进程 + 清状态 + 清 UI，开始全新对话
         btnNewSession.setOnClickListener(v -> {
-            mClaudeSession.resetForNewConversation();
+            mUiGeneration++;
+            if (mProvider == AssistantProvider.CODEX) {
+                mCodexSession.resetForNewConversation();
+            } else {
+                mClaudeSession.resetForNewConversation();
+            }
             mWaitingResponse  = false;
             mCurrentSessionId = null;
+            mTurnOutputAnchored = false;
             mMessages.clear();
             mAdapter.notifyDataSetChanged();
+            if (mSessionAdapter != null) mSessionAdapter.setActiveId(null);
             updateSessionTitle(null);
             updateStatus("● 就绪", 0xFF2E7D32);
             FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
@@ -412,6 +435,17 @@ public class HomeFragment extends Fragment {
                 a.requestScreenCapturePermission();
             }
         });
+
+        mViewGeneration++;
+        mViewActive = true;
+        mCodexSession = CodexExecSession.get(requireContext());
+        mCodexListener = buildCodexListener();
+        mCodexSession.addListener(mCodexListener);
+
+        mClaudeSession = ClaudeStreamSession.get(requireContext());
+        mClaudeListener = buildClaudeListener();
+        mClaudeSession.addListener(mClaudeListener);
+        restoreCodexTranscriptIfNeeded();
 
         // 悬浮窗权限检查：未授权时点击状态栏跳转设置
         if (!android.provider.Settings.canDrawOverlays(requireContext())) {
@@ -444,10 +478,16 @@ public class HomeFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
-        super.onDestroyView();
+        mViewActive = false;
+        mUiGeneration++;
+        mViewGeneration++;
+        if (mCodexSession != null && mCodexListener != null) {
+            mCodexSession.removeListener(mCodexListener);
+        }
         if (mClaudeSession != null && mClaudeListener != null) {
             mClaudeSession.removeListener(mClaudeListener);
         }
+        super.onDestroyView();
     }
 
     @Override
@@ -461,7 +501,9 @@ public class HomeFragment extends Fragment {
     // =========================================================================
 
     private void sendOrConfirm() {
-        if (mWaitingResponse || mClaudeSession.isWaitingResponse()) return;
+        if (isAnyProviderBusy()) {
+            return;
+        }
 
         String text = mInputEdit.getText().toString().trim();
         if (text.isEmpty() && mAttachmentPath == null) { terminal("\r"); return; }
@@ -475,7 +517,8 @@ public class HomeFragment extends Fragment {
         clearAttachment();
 
         // 检查 API Key
-        ApiKeyStore store = new ApiKeyStore(requireContext());
+        ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+        ApiKeyStore store = new ApiKeyStore(requireContext(), mProvider);
         String activeId = store.getActiveId();
         String apiKey   = null;
         String baseUrl  = "";
@@ -495,16 +538,23 @@ public class HomeFragment extends Fragment {
         if (apiKey == null || apiKey.isEmpty()) {
             mAdapter.addMessage(ChatMessage.user(displayText));
             mInputEdit.setText("");
-            mAdapter.addMessage(ChatMessage.assistant("⚠ 请先在「API Key」页面添加并激活一个 API Key。"));
+            mAdapter.addMessage(ChatMessage.assistant(
+                "⚠ 请先在「API Key」页面添加并激活一个 " + profile.displayName + " API Key。"));
             scrollToBottom();
             return;
         }
+        if (mProvider == AssistantProvider.CODEX) {
+            try {
+                ProviderConfigManager.writeCodexConfig(requireContext(),
+                    new ProviderConfigManager.ProviderConfig(apiKey, baseUrl, ""));
+            } catch (Exception ignored) {
+            }
+        }
 
+        mTurnOutputAnchored = false;
         mAdapter.addMessage(ChatMessage.user(displayText));
-        scrollToBottom();
         mInputEdit.setText("");
         mAdapter.addMessage(ChatMessage.assistant("…"));
-        scrollToBottom();
 
         mWaitingResponse = true;
         updateStatus("● 运行中", 0xFF1565C0);
@@ -514,19 +564,148 @@ public class HomeFragment extends Fragment {
         mLastSentText = text;
         appendChatLog("你", text);
 
-        // 投入 Stream-JSON 进程
-        mClaudeSession.send(text, apiKey, baseUrl);
+        if (mProvider == AssistantProvider.CODEX) {
+            mCodexSession.send(text, apiKey, baseUrl);
+        } else {
+            mClaudeSession.send(text, apiKey, baseUrl);
+        }
     }
 
     /** "打断" 按钮调用：SIGTERM 当前 turn，currentSid 保留，下条消息 --resume 续接。 */
     private void stopClaudeProcess() {
-        if (mClaudeSession != null) mClaudeSession.interrupt();
+        stopActiveProviderProcess();
         mWaitingResponse = false;
         updateStatus("● 就绪", 0xFF2E7D32);
         FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
         // 给最后一条 assistant 气泡追加打断标记（沿用 SYSTEM 灰条提示）
         mAdapter.addMessage(ChatMessage.system("● 已打断"));
         scrollToBottom();
+    }
+
+    private void showProviderDialog() {
+        if (getContext() == null) return;
+        String[] labels = {"Claude Code", "Codex"};
+        int checked = mProvider == AssistantProvider.CODEX ? 1 : 0;
+        new AlertDialog.Builder(getContext())
+            .setTitle("选择提供商")
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                AssistantProvider next = which == 1
+                    ? AssistantProvider.CODEX
+                    : AssistantProvider.CLAUDE;
+                dialog.dismiss();
+                requestProviderSwitch(next);
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private void requestProviderSwitch(AssistantProvider next) {
+        if (next == null || next == mProvider) return;
+        if (!isAnyProviderBusy()) {
+            switchProvider(next);
+            return;
+        }
+        new AlertDialog.Builder(requireContext())
+            .setTitle("切换提供商？")
+            .setMessage("当前或后台提供商正在运行，切换会打断正在执行的任务。")
+            .setPositiveButton("切换", (dialog, which) -> {
+                switchProvider(next);
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private void switchProvider(AssistantProvider next) {
+        if (next == null) next = AssistantProvider.CLAUDE;
+        mUiGeneration++;
+        resetAllProviderConversations();
+        mProvider = next;
+        if (mProviderStore != null) mProviderStore.setSelectedProvider(next);
+        updateAssistantLabel();
+        mWaitingResponse = false;
+        mCurrentSessionId = null;
+        mTurnOutputAnchored = false;
+        clearAttachment();
+        mMessages.clear();
+        mAdapter.notifyDataSetChanged();
+        if (mSessionAdapter != null) mSessionAdapter.setActiveId(null);
+        updateSessionTitle(null);
+        updateStatus("● 就绪", 0xFF2E7D32);
+        FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
+        ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+        mAdapter.addMessage(ChatMessage.system("已切换到 " + profile.displayName));
+        scrollToBottom();
+    }
+
+    private void updateAssistantLabel() {
+        if (mAdapter != null) {
+            mAdapter.setAssistantLabel(ProviderProfile.forProvider(mProvider).displayName);
+        }
+    }
+
+    private boolean isAnyProviderBusy() {
+        return mWaitingResponse
+            || (mClaudeSession != null && mClaudeSession.isWaitingResponse())
+            || (mCodexSession != null && mCodexSession.isRunning());
+    }
+
+    private void stopActiveProviderProcess() {
+        if (mProvider == AssistantProvider.CODEX) {
+            if (mCodexSession != null) mCodexSession.interrupt();
+        } else {
+            if (mClaudeSession != null) mClaudeSession.interrupt();
+        }
+    }
+
+    private void resetAllProviderConversations() {
+        if (mClaudeSession != null) mClaudeSession.resetForNewConversation();
+        if (mCodexSession != null) mCodexSession.resetForNewConversation();
+    }
+
+    private void postProviderUi(AssistantProvider provider, int viewGeneration, Runnable action) {
+        if (!mViewActive || mViewGeneration != viewGeneration) return;
+        final int generation = mUiGeneration;
+        mHandler.post(() -> {
+            if (!mViewActive
+                    || mViewGeneration != viewGeneration
+                    || mProvider != provider
+                    || mUiGeneration != generation
+                    || mAdapter == null) {
+                return;
+            }
+            action.run();
+        });
+    }
+
+    private void restoreCodexTranscriptIfNeeded() {
+        if (mProvider != AssistantProvider.CODEX || mCodexSession == null || mAdapter == null) return;
+        List<ChatMessage> snapshot = mCodexSession.snapshotTranscript();
+        boolean running = mCodexSession.isRunning();
+        if (snapshot.isEmpty() && !running) return;
+
+        mMessages.clear();
+        mMessages.addAll(snapshot);
+        if (running && needsCodexRunningPlaceholder(snapshot)) {
+            mMessages.add(ChatMessage.assistant("…"));
+        }
+        mAdapter.notifyDataSetChanged();
+        mWaitingResponse = running;
+        mTurnOutputAnchored = false;
+        if (running) {
+            updateStatus("● 运行中", 0xFF1565C0);
+            FloatingStatusService.updateStatus("● 运行中", 0xFF1565C0, "", true);
+            scrollToCurrentTurnOutputStartOnce();
+        } else {
+            updateStatus("● 就绪", 0xFF2E7D32);
+            FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
+            scrollToBottom();
+        }
+    }
+
+    private boolean needsCodexRunningPlaceholder(List<ChatMessage> snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) return true;
+        ChatMessage last = snapshot.get(snapshot.size() - 1);
+        return last == null || last.type != ChatMessage.Type.ASSISTANT;
     }
 
     /** 设置子进程所需的 Termux + ubuntu 环境变量。 */
@@ -687,8 +866,8 @@ public class HomeFragment extends Fragment {
                     updateStatus(active ? "● 会话活跃" : "● 就绪",
                                  active ? 0xFF2E7D32    : 0xFF888888);
                 }
-                updateScreenCaptureStatus(com.termux.app.mcp.ScreenCaptureService.isRunning());
-                updateAccessibilityStatus(com.termux.app.mcp.McpAccessibilityService.isRunning());
+                updateScreenCaptureStatus(com.termux.app.mcp.AndroidMcpPermissionState.isScreenCaptureRunning());
+                updateAccessibilityStatus(com.termux.app.mcp.AndroidMcpPermissionState.isAccessibilityReady(requireContext()));
                 mHandler.postDelayed(this, 2000);
             }
         };
@@ -705,6 +884,8 @@ public class HomeFragment extends Fragment {
 
     /** 从历史列表恢复指定会话：清空 UI、设置 resume ID、更新标题，并异步回放历史对话气泡。 */
     private void resumeSession(SessionStore.Entry entry) {
+        if (mProvider != AssistantProvider.CLAUDE) return;
+        mUiGeneration++;
         mClaudeSession.startWithResume(entry.id);   // kill 当前 + 标记下条 --resume entry.id
         mMessages.clear();
         mAdapter.notifyDataSetChanged();
@@ -821,11 +1002,11 @@ public class HomeFragment extends Fragment {
         mSessionAdapter.setActiveId(mCurrentSessionId);
     }
 
-    /** 更新顶栏标题；preview 为 null 时显示默认 "Claude Code"。 */
+    /** 更新顶栏标题；preview 为 null 时显示当前提供商名称。 */
     private void updateSessionTitle(@Nullable String preview) {
         if (mSessionTitle == null) return;
         if (preview == null || preview.isEmpty()) {
-            mSessionTitle.setText("Claude Code");
+            mSessionTitle.setText(ProviderProfile.forProvider(mProvider).displayName);
         } else {
             mSessionTitle.setText(preview.length() > 30 ? preview.substring(0, 30) + "…" : preview);
         }
@@ -883,6 +1064,32 @@ public class HomeFragment extends Fragment {
         });
     }
 
+    private void scrollToCurrentTurnOutputStartOnce() {
+        if (mTurnOutputAnchored || mRecycler == null || mAdapter == null) return;
+        mRecycler.post(() -> {
+            if (mTurnOutputAnchored || mRecycler == null || mAdapter == null) return;
+            int index = firstGeneratedMessageIndexInCurrentTurn();
+            if (index < 0) return;
+            RecyclerView.LayoutManager layoutManager = mRecycler.getLayoutManager();
+            if (layoutManager instanceof LinearLayoutManager) {
+                ((LinearLayoutManager) layoutManager).scrollToPositionWithOffset(index, 0);
+            } else {
+                mRecycler.scrollToPosition(index);
+            }
+            mTurnOutputAnchored = true;
+        });
+    }
+
+    private int firstGeneratedMessageIndexInCurrentTurn() {
+        for (int i = mMessages.size() - 1; i >= 0; i--) {
+            ChatMessage message = mMessages.get(i);
+            if (message != null && message.type == ChatMessage.Type.USER) {
+                return i + 1 < mMessages.size() ? i + 1 : -1;
+            }
+        }
+        return mMessages.isEmpty() ? -1 : 0;
+    }
+
     /**
      * 由 TermuxActivity.syncChatLogToHome() 在主线程调用。
      * 传入日志文件解析后的所有条目，只把第 mSyncedLogEntries 条之后的新内容加入 UI。
@@ -921,6 +1128,16 @@ public class HomeFragment extends Fragment {
                 mAdapter.notifyItemRemoved(i);
             }
         }
+    }
+
+    @Nullable
+    private ChatMessage getLastAssistantMessageInCurrentTurn() {
+        for (int i = mMessages.size() - 1; i >= 0; i--) {
+            ChatMessage m = mMessages.get(i);
+            if (m.type == ChatMessage.Type.USER) break;
+            if (m.type == ChatMessage.Type.ASSISTANT) return m;
+        }
+        return null;
     }
 
     @Nullable
@@ -1641,40 +1858,97 @@ public class HomeFragment extends Fragment {
     // thread; we marshal each to the UI thread via mHandler.post.
     // =========================================================================
 
+    private CodexExecSession.Listener buildCodexListener() {
+        final int viewGeneration = mViewGeneration;
+        return new CodexExecSession.Listener() {
+            @Override public void onSystem(String info) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    if (!CodexExecSession.isTransientSystemMessage(info)) {
+                        mAdapter.addMessage(ChatMessage.system(info));
+                        scrollToBottom();
+                    }
+                });
+            }
+            @Override public void onThinking(String thinking) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    mAdapter.updateLastAssistantThinking(thinking);
+                    scrollToCurrentTurnOutputStartOnce();
+                });
+            }
+            @Override public void onAssistantText(String text) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    mAdapter.updateLastAssistantText(text);
+                    scrollToCurrentTurnOutputStartOnce();
+                });
+            }
+            @Override public void onToolUse(String name, String inputJson) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    mAdapter.addMessage(ChatMessage.toolUse(name, inputJson));
+                    scrollToCurrentTurnOutputStartOnce();
+                });
+            }
+            @Override public void onToolResult(String name, String summary, String full) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    mAdapter.addMessage(ChatMessage.toolResult(name, summary, full));
+                    scrollToCurrentTurnOutputStartOnce();
+                });
+            }
+            @Override public void onResult(boolean isError, String errMsg) {
+                postProviderUi(AssistantProvider.CODEX, viewGeneration, () -> {
+                    if (isError) {
+                        mAdapter.updateLastAssistantText("⚠ " + errMsg);
+                    } else {
+                        dropPlaceholder();
+                    }
+                    mAdapter.collapseLastAssistantThinking();
+                    mWaitingResponse = false;
+                    updateStatus("● 就绪", 0xFF2E7D32);
+                    FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
+                    ChatMessage last = getLastAssistantMessageInCurrentTurn();
+                    if (last != null && last.content != null && !last.content.isEmpty()) {
+                        appendChatLog("Codex", last.content);
+                    }
+                    scrollToCurrentTurnOutputStartOnce();
+                });
+            }
+        };
+    }
+
     private ClaudeStreamSession.Listener buildClaudeListener() {
+        final int viewGeneration = mViewGeneration;
         return new ClaudeStreamSession.Listener() {
             @Override public void onSystem(String info) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     mAdapter.addMessage(ChatMessage.system(info));
                     scrollToBottom();
                 });
             }
             @Override public void onAssistantText(String text) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     mAdapter.updateLastAssistantText(text);
-                    scrollToBottom();
+                    scrollToCurrentTurnOutputStartOnce();
                 });
             }
             @Override public void onAssistantThinking(String thinking) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     mAdapter.updateLastAssistantThinking(thinking);
-                    scrollToBottom();
+                    scrollToCurrentTurnOutputStartOnce();
                 });
             }
             @Override public void onToolUse(String name, String inputJson) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     mAdapter.addMessage(ChatMessage.toolUse(name, inputJson));
-                    scrollToBottom();
+                    scrollToCurrentTurnOutputStartOnce();
                 });
             }
             @Override public void onToolResult(String name, String summary, String full) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     mAdapter.addMessage(ChatMessage.toolResult(name, summary, full));
-                    scrollToBottom();
+                    scrollToCurrentTurnOutputStartOnce();
                 });
             }
             @Override public void onResult(String sid, boolean isError, String errMsg) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     if (isError) {
                         mAdapter.updateLastAssistantText("⚠ " + errMsg);
                     } else {
@@ -1708,7 +1982,7 @@ public class HomeFragment extends Fragment {
                 });
             }
             @Override public void onProcessDied(String reason) {
-                mHandler.post(() -> {
+                postProviderUi(AssistantProvider.CLAUDE, viewGeneration, () -> {
                     dropPlaceholder();
                     mAdapter.collapseLastAssistantThinking();
                     mAdapter.collapseAllToolDetailsInLastTurn();

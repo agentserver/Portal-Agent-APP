@@ -3,6 +3,8 @@ package com.termux.app;
 /** 聊天消息数据类，用于简化 UI 的聊天视图。 */
 public class ChatMessage {
 
+    private static final int MAX_TOOL_DETAIL_CHARS = 12_000;
+
     public enum Type { USER, ASSISTANT, SYSTEM, TOOL_USE, TOOL_RESULT }
 
     public final Type type;
@@ -36,7 +38,7 @@ public class ChatMessage {
     public static ChatMessage toolUse(String name, String inputJson) {
         ChatMessage m = new ChatMessage(Type.TOOL_USE, "🔧 调用 " + name);
         m.toolName   = name;
-        m.toolDetail = inputJson != null ? inputJson : "";
+        m.toolDetail = boundedToolDetail(inputJson);
         return m;
     }
 
@@ -47,7 +49,16 @@ public class ChatMessage {
                 : "📥 " + name + ": " + summary;
         ChatMessage m = new ChatMessage(Type.TOOL_RESULT, title);
         m.toolName   = name;
-        m.toolDetail = full != null ? full : "";
+        m.toolDetail = boundedToolDetail(full);
         return m;
+    }
+
+    private static String boundedToolDetail(String value) {
+        if (value == null) return "";
+        if (value.length() <= MAX_TOOL_DETAIL_CHARS) return value;
+        return value.substring(0, MAX_TOOL_DETAIL_CHARS)
+            + "\n\n... 内容过长，已省略 "
+            + (value.length() - MAX_TOOL_DETAIL_CHARS)
+            + " 个字符。完整结果已返回给模型，聊天界面仅显示摘要。";
     }
 }

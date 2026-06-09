@@ -22,17 +22,24 @@ public class AutoTaskCoordinator {
     @SuppressWarnings("FieldCanBeLocal")
     private final AutoClaudeManager mAutoClaudeManager;
     @SuppressWarnings("FieldCanBeLocal")
+    private final AutoCodexManager mAutoCodexManager;
+    @SuppressWarnings("FieldCanBeLocal")
     private final AutoAgentServerManager mAutoAgentServerManager;
+    @SuppressWarnings("FieldCanBeLocal")
+    private final AutoLoomManager mAutoLoomManager;
     private boolean mEnabled = true;
 
     public AutoTaskCoordinator(@NonNull TermuxActivity activity) {
-        // AutoClaudeManager / AutoAgentServerManager 先初始化：后台写 inner 脚本，
+        // AutoClaudeManager / addon managers 先初始化：后台写 inner 脚本，
         // Ubuntu 安装需要几分钟，有充足准备时间
         mAutoClaudeManager = new AutoClaudeManager(activity);
+        mAutoCodexManager = new AutoCodexManager(activity);
         mAutoAgentServerManager = new AutoAgentServerManager(activity);
+        mAutoLoomManager = new AutoLoomManager(activity);
         mApiSelfCheckManager = new ApiSelfCheckManager(activity);
         mAutoUbuntuManager = new AutoUbuntuManager(activity);
         mAutoUbuntuManager.setAgentServerManager(mAutoAgentServerManager);
+        mAutoUbuntuManager.setLoomManager(mAutoLoomManager);
         // 旧 HTTP API 桥（只读，保留向后兼容）
         mApiHttpBridgeServer = new ApiHttpBridgeServer(activity);
         mApiHttpBridgeServer.start();

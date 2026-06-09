@@ -10,9 +10,11 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
@@ -54,6 +56,10 @@ public class UbuntuSnapshotManager {
     static final String UBUNTU_ROOTFS = ROOTFS_DIR + "/ubuntu";
     private static final String TMP_TAR   =
         TermuxConstants.TERMUX_HOME_DIR_PATH + "/.ubuntu-snapshot-tmp.tar.xz";
+    private static final int DOWNLOAD_ATTEMPTS = 3;
+    private static final int DOWNLOAD_CONNECT_TIMEOUT_MS = 45_000;
+    private static final int DOWNLOAD_READ_TIMEOUT_MS = 180_000;
+    private static final int MAX_REDIRECTS = 5;
 
     // ── 回调接口 ──────────────────────────────────────────────────────────
 
@@ -77,16 +83,32 @@ public class UbuntuSnapshotManager {
      * @return true = 健康（claude --version 正常）
      */
     public static boolean isHealthy() {
+        if (!isRootfsUsable()) return false;
         try {
-            Process p = new ProcessBuilder(PROOT_D, "login", "ubuntu",
+            ProcessBuilder pb = new ProcessBuilder(PROOT_D, "login", "ubuntu",
                 "--user", "claude", "--", "sh", "-c", "claude --version")
-                .redirectErrorStream(true)
-                .start();
-            p.getInputStream().transferTo(OutputStream.nullOutputStream());
+                .redirectErrorStream(true);
+            setTermuxEnv(pb);
+            Process p = pb.start();
+            drain(p.getInputStream());
             return p.waitFor() == 0;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    public static boolean isRootfsUsable() {
+        return isRootfsUsable(new File(UBUNTU_ROOTFS));
+    }
+
+    static boolean isRootfsUsable(File rootfs) {
+        if (rootfs == null || !rootfs.isDirectory()) return false;
+        if (!new File(rootfs, "etc/passwd").isFile()) return false;
+        if (!new File(rootfs, "etc/os-release").isFile()) return false;
+        if (!new File(rootfs, "usr").isDirectory()) return false;
+        if (!new File(rootfs, "usr/bin/env").isFile()) return false;
+        return new File(rootfs, "bin/sh").exists()
+            || new File(rootfs, "usr/bin/sh").exists();
     }
 
     /** 检查 APK assets 中是否内置了快照文件。 */
@@ -104,6 +126,7 @@ public class UbuntuSnapshotManager {
      * 在后台线程调用。
      */
     public static void deployFromAsset(AssetManager assets, Callback cb) {
+        boolean replacingRootfs = false;
         try {
             File tmp = new File(TMP_TAR);
             cb.onStatus("从安装包提取快照（" + SNAPSHOT_SIZE_LABEL + "）…");
@@ -121,6 +144,7 @@ public class UbuntuSnapshotManager {
             }
             cb.onStatus("清除旧环境…");
             deleteRootfs();
+            replacingRootfs = true;
             cb.onStatus("解压中（可能需要 1-2 分钟）…");
             extract(tmp, cb);
             tmp.delete();
@@ -129,6 +153,7 @@ public class UbuntuSnapshotManager {
         } catch (Exception e) {
             Log.e(TAG, "deployFromAsset failed", e);
             new File(TMP_TAR).delete();
+            if (replacingRootfs) deleteRootfsQuietly();
             cb.onFailed(e.getMessage());
         }
     }
@@ -137,11 +162,14 @@ public class UbuntuSnapshotManager {
      * 完整部署流程：下载 → 校验 → 解压。在后台线程调用。
      */
     public static void deploy(Callback cb) {
+        boolean replacingRootfs = false;
         try {
-            // Step 1: 下载
-            cb.onStatus("正在下载 Ubuntu 快照（" + SNAPSHOT_SIZE_LABEL + "）…");
             File tmp = new File(TMP_TAR);
-            download(SNAPSHOT_URL, tmp, cb);
+
+            // Step 1: 下载
+            if (!tryReuseVerifiedSnapshot(tmp, cb)) {
+                downloadWithRetries(tmp, cb);
+            }
 
             // Step 2: SHA256 校验
             cb.onStatus("校验文件完整性…");
@@ -155,6 +183,7 @@ public class UbuntuSnapshotManager {
             // Step 3: 删除旧 rootfs
             cb.onStatus("清除旧环境…");
             deleteRootfs();
+            replacingRootfs = true;
 
             // Step 4: 解压
             cb.onStatus("正在解压（请稍候）…");
@@ -169,6 +198,7 @@ public class UbuntuSnapshotManager {
         } catch (Exception e) {
             Log.e(TAG, "deploy failed", e);
             new File(TMP_TAR).delete();
+            if (replacingRootfs) deleteRootfsQuietly();
             cb.onFailed(e.getMessage());
         }
     }
@@ -177,46 +207,123 @@ public class UbuntuSnapshotManager {
     // 内部实现
     // ─────────────────────────────────────────────────────────────────────
 
-    private static void download(String urlStr, File dest, Callback cb) throws IOException {
-        URL url = new URL(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(60_000);
-        conn.setInstanceFollowRedirects(true);
-
-        // GitHub Release 会 301 重定向到 CDN
-        int code = conn.getResponseCode();
-        if (code == HttpURLConnection.HTTP_MOVED_PERM
-                || code == HttpURLConnection.HTTP_MOVED_TEMP
-                || code == 307 || code == 308) {
-            String location = conn.getHeaderField("Location");
-            conn.disconnect();
-            conn = (HttpURLConnection) new URL(location).openConnection();
-            conn.setConnectTimeout(30_000);
-            conn.setReadTimeout(60_000);
+    private static boolean tryReuseVerifiedSnapshot(File tmp, Callback cb) throws Exception {
+        if (!tmp.isFile()) return false;
+        if (tmp.length() != SNAPSHOT_BYTES) {
+            tmp.delete();
+            return false;
         }
+        cb.onStatus("发现已下载快照，校验文件完整性…");
+        String actualSha = sha256(tmp);
+        if (SNAPSHOT_SHA256.equalsIgnoreCase(actualSha)) {
+            cb.onProgress(100);
+            return true;
+        }
+        Log.w(TAG, "discarding cached snapshot with sha256=" + actualSha);
+        tmp.delete();
+        return false;
+    }
 
-        long total = conn.getContentLengthLong();
-        if (total <= 0) total = SNAPSHOT_BYTES;
-
-        try (InputStream in = conn.getInputStream();
-             OutputStream out = Files.newOutputStream(dest.toPath())) {
-            byte[] buf = new byte[65536];
-            long downloaded = 0;
-            int n;
-            int lastPercent = -1;
-            while ((n = in.read(buf)) != -1) {
-                out.write(buf, 0, n);
-                downloaded += n;
-                int pct = (int) (downloaded * 100 / total);
-                if (pct != lastPercent) {
-                    lastPercent = pct;
-                    cb.onProgress(pct);
+    private static void downloadWithRetries(File tmp, Callback cb) throws IOException {
+        IOException last = null;
+        for (int attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+            cb.onStatus("正在下载 Ubuntu 快照（" + SNAPSHOT_SIZE_LABEL + "，"
+                + attempt + "/" + DOWNLOAD_ATTEMPTS + "）…");
+            try {
+                download(SNAPSHOT_URL, tmp, cb);
+                return;
+            } catch (IOException e) {
+                last = e;
+                tmp.delete();
+                Log.w(TAG, "snapshot download attempt " + attempt + " failed", e);
+                if (attempt < DOWNLOAD_ATTEMPTS) {
+                    cb.onStatus("下载失败，准备重试：" + shortMessage(e));
+                    sleepBeforeRetry(attempt);
                 }
             }
-        } finally {
-            conn.disconnect();
         }
+        throw last != null ? last : new IOException("download failed");
+    }
+
+    private static void sleepBeforeRetry(int attempt) throws IOException {
+        try {
+            Thread.sleep(Math.min(15_000L, attempt * 3_000L));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("download retry interrupted", e);
+        }
+    }
+
+    private static String shortMessage(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null || msg.trim().isEmpty()) return e.getClass().getSimpleName();
+        return msg;
+    }
+
+    private static void download(String urlStr, File dest, Callback cb) throws IOException {
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = null;
+        try {
+            for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+                conn = openDownloadConnection(url);
+                int code = conn.getResponseCode();
+                if (isRedirect(code)) {
+                    String location = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    conn = null;
+                    if (location == null || location.trim().isEmpty()) {
+                        throw new IOException("redirect without Location");
+                    }
+                    url = new URL(url, location);
+                    continue;
+                }
+                if (code < 200 || code >= 300) {
+                    throw new IOException("HTTP " + code + " while downloading snapshot");
+                }
+
+                long total = conn.getContentLengthLong();
+                if (total <= 0) total = SNAPSHOT_BYTES;
+
+                try (InputStream in = conn.getInputStream();
+                     OutputStream out = Files.newOutputStream(dest.toPath())) {
+                    byte[] buf = new byte[65536];
+                    long downloaded = 0;
+                    int n;
+                    int lastPercent = -1;
+                    while ((n = in.read(buf)) != -1) {
+                        out.write(buf, 0, n);
+                        downloaded += n;
+                        int pct = (int) Math.min(downloaded * 100 / total, 100);
+                        if (pct != lastPercent) {
+                            lastPercent = pct;
+                            cb.onProgress(pct);
+                        }
+                    }
+                }
+                return;
+            }
+            throw new IOException("too many redirects while downloading snapshot");
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static HttpURLConnection openDownloadConnection(URL url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setConnectTimeout(DOWNLOAD_CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(DOWNLOAD_READ_TIMEOUT_MS);
+        conn.setInstanceFollowRedirects(false);
+        conn.setRequestProperty("User-Agent", "ClaudeCodeAndroidApp");
+        conn.setRequestProperty("Accept", "application/octet-stream,*/*");
+        return conn;
+    }
+
+    private static boolean isRedirect(int code) {
+        return code == HttpURLConnection.HTTP_MOVED_PERM
+            || code == HttpURLConnection.HTTP_MOVED_TEMP
+            || code == HttpURLConnection.HTTP_SEE_OTHER
+            || code == 307
+            || code == 308;
     }
 
     private static String sha256(File file) throws Exception {
@@ -242,6 +349,14 @@ public class UbuntuSnapshotManager {
         if (exit != 0) throw new Exception("删除旧 rootfs 失败 (exit=" + exit + ")");
     }
 
+    private static void deleteRootfsQuietly() {
+        try {
+            deleteRootfs();
+        } catch (Exception e) {
+            Log.w(TAG, "failed to cleanup incomplete rootfs", e);
+        }
+    }
+
     private static void extract(File tar, Callback cb) throws Exception {
         cb.onStatus("解压中（可能需要 1-2 分钟）…");
         // tar -xJf <tar.xz> -C <rootfs_dir>
@@ -252,9 +367,39 @@ public class UbuntuSnapshotManager {
         setTermuxEnv(pb);
         pb.redirectErrorStream(true);
         Process proc = pb.start();
-        proc.getInputStream().transferTo(OutputStream.nullOutputStream());
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        copy(proc.getInputStream(), output);
         int exit = proc.waitFor();
-        if (exit != 0) throw new Exception("解压失败 (exit=" + exit + ")");
+        if (exit != 0) {
+            String detail = tail(new String(output.toByteArray(), StandardCharsets.UTF_8), 800);
+            throw new Exception("解压失败 (exit=" + exit + ")" +
+                (detail.isEmpty() ? "" : ": " + detail));
+        }
+        if (!isRootfsUsable()) {
+            throw new Exception("解压后的 Ubuntu rootfs 不完整");
+        }
+    }
+
+    private static void drain(InputStream in) throws IOException {
+        byte[] buffer = new byte[8192];
+        while (in.read(buffer) != -1) {
+            // Discard output.
+        }
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = in.read(buffer)) != -1) {
+            out.write(buffer, 0, n);
+        }
+    }
+
+    private static String tail(String s, int maxChars) {
+        if (s == null) return "";
+        String trimmed = s.trim();
+        if (trimmed.length() <= maxChars) return trimmed;
+        return trimmed.substring(trimmed.length() - maxChars);
     }
 
     private static void setTermuxEnv(ProcessBuilder pb) {

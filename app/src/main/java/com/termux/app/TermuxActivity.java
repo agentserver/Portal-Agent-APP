@@ -1004,6 +1004,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             } else if (id == R.id.nav_agentserver) {
                 showAgentServerMode();
                 return true;
+            } else if (id == R.id.nav_loom) {
+                showLoomMode();
+                return true;
             }
             return false;
         });
@@ -1044,6 +1047,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment homeF   = fm.findFragmentByTag("home");
         androidx.fragment.app.Fragment apiF    = fm.findFragmentByTag("apikey");
         androidx.fragment.app.Fragment agentF  = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF   = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (homeF == null) {
             ft.add(R.id.home_fragment_container, new HomeFragment(), "home");
@@ -1052,6 +1056,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         }
         if (apiF    != null) ft.hide(apiF);
         if (agentF  != null) ft.hide(agentF);
+        if (loomF   != null) ft.hide(loomF);
         if (detailF != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1076,6 +1081,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment homeF  = fm.findFragmentByTag("home");
         androidx.fragment.app.Fragment apiF   = fm.findFragmentByTag("apikey");
         androidx.fragment.app.Fragment agentF = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         if (apiF == null) {
             ft.add(R.id.home_fragment_container, new ApiKeyFragment(), "apikey");
         } else {
@@ -1083,6 +1089,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         }
         if (homeF  != null) ft.hide(homeF);
         if (agentF != null) ft.hide(agentF);
+        if (loomF  != null) ft.hide(loomF);
         ft.commit();
     }
 
@@ -1106,6 +1113,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment homeF  = fm.findFragmentByTag("home");
         androidx.fragment.app.Fragment apiF   = fm.findFragmentByTag("apikey");
         androidx.fragment.app.Fragment agentF = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         if (agentF == null) {
             ft.add(R.id.home_fragment_container, new AgentServerFragment(), "agentserver");
         } else {
@@ -1113,6 +1121,41 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         }
         if (homeF != null) ft.hide(homeF);
         if (apiF  != null) ft.hide(apiF);
+        if (loomF != null) ft.hide(loomF);
+        ft.commit();
+    }
+
+    /** 切换到 Loom 配置页面。 */
+    private void showLoomMode() {
+        DrawerLayout drawer = getDrawer();
+        ViewPager toolbar = getTerminalToolbarViewPager();
+        View container = findViewById(R.id.home_fragment_container);
+        if (drawer == null || container == null) return;
+
+        if (drawer.isDrawerOpen(android.view.Gravity.START))
+            drawer.closeDrawer(android.view.Gravity.START);
+
+        clearFocusAndHideKeyboard();
+        drawer.setVisibility(View.GONE);
+        if (toolbar != null) toolbar.setVisibility(View.GONE);
+        container.setVisibility(View.VISIBLE);
+
+        androidx.fragment.app.FragmentManager fm = getSupportFragmentManager();
+        androidx.fragment.app.FragmentTransaction ft = fm.beginTransaction();
+        androidx.fragment.app.Fragment homeF  = fm.findFragmentByTag("home");
+        androidx.fragment.app.Fragment apiF   = fm.findFragmentByTag("apikey");
+        androidx.fragment.app.Fragment agentF = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
+        androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
+        if (loomF == null) {
+            ft.add(R.id.home_fragment_container, new LoomFragment(), "loom");
+        } else {
+            ft.show(loomF);
+        }
+        if (homeF != null) ft.hide(homeF);
+        if (apiF != null) ft.hide(apiF);
+        if (agentF != null) ft.hide(agentF);
+        if (detailF != null) ft.remove(detailF);
         ft.commit();
     }
 
@@ -1136,10 +1179,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment homeF   = fm.findFragmentByTag("home");
         androidx.fragment.app.Fragment apiF    = fm.findFragmentByTag("apikey");
         androidx.fragment.app.Fragment agentF  = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF   = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (homeF   != null) ft.hide(homeF);
         if (apiF    != null) ft.hide(apiF);
         if (agentF  != null) ft.hide(agentF);
+        if (loomF   != null) ft.hide(loomF);
         if (detailF != null) ft.remove(detailF);
         ft.add(R.id.home_fragment_container,
             AgentTaskDetailFragment.newInstance(taskId), "agent_task_detail");
@@ -1161,9 +1206,11 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment homeF  = fm.findFragmentByTag("home");
         androidx.fragment.app.Fragment apiF   = fm.findFragmentByTag("apikey");
         androidx.fragment.app.Fragment agentF = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         if (homeF  != null) ft.hide(homeF);
         if (apiF   != null) ft.hide(apiF);
         if (agentF != null) ft.hide(agentF);
+        if (loomF  != null) ft.hide(loomF);
         ft.commit();
 
         // 按用户设置决定是否恢复 extra keys 工具栏
@@ -1313,36 +1360,13 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         return sb.toString();
     }
 
-    /**
-     * 将 API Key（和可选的 Base URL）直接写入 ubuntu 的 ~/.bashrc。
-     * 使用 Java File I/O，不向任何终端 session 发送命令。
-     * @param key     ANTHROPIC_API_KEY 值
-     * @param baseUrl ANTHROPIC_BASE_URL 值，空字符串表示使用官方默认（不写入）
-     */
     public void setActiveApiKey(String key, String baseUrl) {
+        setActiveApiKey(AssistantProvider.CLAUDE, key, baseUrl);
+    }
+
+    public void setActiveApiKey(AssistantProvider provider, String key, String baseUrl) {
         try {
-            String filesDir = getApplicationContext().getFilesDir().getAbsolutePath();
-            java.io.File bashrcFile = new java.io.File(
-                filesDir + "/usr/var/lib/proot-distro/installed-rootfs/ubuntu/root/.bashrc");
-            if (!bashrcFile.exists()) return;
-
-            java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
-            String content = new String(java.nio.file.Files.readAllBytes(bashrcFile.toPath()), utf8);
-
-            // 删除旧的 ANTHROPIC_* 行
-            StringBuilder sb = new StringBuilder();
-            for (String line : content.split("\n", -1)) {
-                if (!line.contains("ANTHROPIC_API_KEY") && !line.contains("ANTHROPIC_BASE_URL"))
-                    sb.append(line).append("\n");
-            }
-            String trimmed = sb.toString().replaceAll("\n{2,}$", "\n");
-            StringBuilder newContent = new StringBuilder(trimmed);
-            newContent.append("export ANTHROPIC_API_KEY='").append(key).append("'\n");
-            if (baseUrl != null && !baseUrl.isEmpty()) {
-                newContent.append("export ANTHROPIC_BASE_URL='").append(baseUrl).append("'\n");
-            }
-
-            java.nio.file.Files.write(bashrcFile.toPath(), newContent.toString().getBytes(utf8));
+            ProviderEnvironmentWriter.writeActiveKey(this, provider, key, baseUrl);
         } catch (java.io.IOException e) {
             Logger.logError(LOG_TAG, "setActiveApiKey: " + e.getMessage());
         }

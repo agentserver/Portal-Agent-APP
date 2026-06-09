@@ -68,7 +68,11 @@ public class AutoClaudeManager {
      *      - API key：选择接入点（官方 / 中科院镜像 / 自定义），写入 ~/.bashrc + ~/.claude.json
      *   7. 自我清除（从 .bashrc 移除 hook，删除脚本文件）
      */
-    private String buildClaudeInnerScript() {
+    public static String buildInnerScriptForTest() {
+        return buildClaudeInnerScript();
+    }
+
+    private static String buildClaudeInnerScript() {
         StringBuilder s = new StringBuilder();
 
         s.append("#!/bin/bash\n");
@@ -164,55 +168,18 @@ public class AutoClaudeManager {
         s.append("fi\n");
         s.append("echo '[*] Claude Code 安装成功'\n\n");
 
-        // ── Step 5: 认证配置 ──────────────────────────────────────────────────
-        s.append("echo ''\n");
-        s.append("echo '认证方式：'\n");
-        s.append("echo '  1) API 密钥（推荐，无需浏览器）'\n");
-        s.append("echo '  2) 官方登录（稍后在终端完成）'\n");
-        s.append("printf '选择 [1/2，默认 1]: '\n");
-        s.append("read -r _auth\n");
-        s.append("[ -z \"$_auth\" ] && _auth=1\n\n");
-
-        s.append("if [ \"$_auth\" = \"1\" ]; then\n");
-        s.append("    printf 'Anthropic API Key: '\n");
-        s.append("    read -r _key\n");
-        s.append("    if [ -n \"$_key\" ]; then\n");
-
-        // 选择接入点
-        s.append("        echo ''\n");
-        s.append("        echo 'API 接入点：'\n");
-        s.append("        echo '  1) 官方     https://api.anthropic.com'\n");
-        s.append("        echo '  2) DeepSeek https://api.deepseek.com/anthropic  [Anthropic 兼容]'\n");
-        s.append("        echo '  3) 自定义 URL'\n");
-        s.append("        printf '选择 [1/2/3，默认 1]: '\n");
-        s.append("        read -r _ep\n");
-        s.append("        [ -z \"$_ep\" ] && _ep=1\n");
-        s.append("        case \"$_ep\" in\n");
-        s.append("            2) _base='https://api.deepseek.com/anthropic' ;;\n");
-        s.append("            3) printf 'Base URL: '; read -r _base ;;\n");
-        s.append("            *) _base='' ;;\n");
-        s.append("        esac\n\n");
-
-        // 写配置到 claude 用户 home（终端以 claude 用户身份运行）
-        s.append("        _chome=/home/claude\n");
-        s.append("        mkdir -p \"$_chome\" 2>/dev/null\n");
-        // 写 /home/claude/.bashrc（幂等）
-        s.append("        grep -qF 'ANTHROPIC_API_KEY' \"$_chome/.bashrc\" 2>/dev/null || {\n");
-        s.append("            printf '\\n# Claude Code\\nexport ANTHROPIC_API_KEY=\"%s\"\\n' \"$_key\" >> \"$_chome/.bashrc\"\n");
-        s.append("            [ -n \"$_base\" ] && printf 'export ANTHROPIC_BASE_URL=\"%s\"\\n' \"$_base\" >> \"$_chome/.bashrc\"\n");
-        s.append("        }\n");
+        // ── Step 5: 非交互式基础配置 ──────────────────────────────────────────
+        // API key 由 App 的密钥页面写入 provider 环境；这里不能阻塞后续 Codex/AgentServer/Loom setup。
+        s.append("echo '[*] Claude 密钥由 App API Key 页面管理，首次部署不再等待终端输入。'\n");
+        s.append("id claude >/dev/null 2>&1 || useradd -m -s /bin/bash claude\n");
+        s.append("_chome=/home/claude\n");
+        s.append("mkdir -p \"$_chome\" \"$_chome/.local/bin\" 2>/dev/null\n");
         // 确保 ~/.local/bin 在 PATH 前面，便于使用 wrapper 拦截 AgentServer 任务
-        s.append("        grep -qF 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$_chome/.bashrc\" 2>/dev/null || ");
+        s.append("grep -qF 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$_chome/.bashrc\" 2>/dev/null || ");
         s.append("printf 'export PATH=\"$HOME/.local/bin:$PATH\"\\n' >> \"$_chome/.bashrc\"\n");
-        s.append("        export ANTHROPIC_API_KEY=\"$_key\"\n");
-        s.append("        [ -n \"$_base\" ] && export ANTHROPIC_BASE_URL=\"$_base\"\n\n");
-
         // 写 /home/claude/.claude.json 跳过 onboarding
-        s.append("        printf '{\\n  \"hasCompletedOnboarding\": true\\n}\\n' > \"$_chome/.claude.json\"\n");
-        s.append("        chown claude:claude \"$_chome/.bashrc\" \"$_chome/.claude.json\" 2>/dev/null\n");
-        s.append("        echo '[*] 配置已写入 /home/claude/.bashrc'\n");
-        s.append("    fi\n");
-        s.append("fi\n\n");
+        s.append("printf '{\\n  \"hasCompletedOnboarding\": true\\n}\\n' > \"$_chome/.claude.json\"\n");
+        s.append("chown -R claude:claude \"$_chome\" 2>/dev/null\n\n");
 
         // ── Step 6: 注册 Android MCP Server ─────────────────────────────────
         s.append("echo '[*] 注册 Android MCP Server...'\n");

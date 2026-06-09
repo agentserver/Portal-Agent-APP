@@ -1,6 +1,7 @@
 package com.termux.app;
 
 import android.app.AlertDialog;
+import android.content.res.ColorStateList;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.LayoutInflater;
@@ -35,6 +36,12 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
     private List<ApiKeyStore.Entry> mEntries;
     private ApiKeyAdapter          mAdapter;
     private TextView               mCountText;
+    private AssistantProvider      mProvider = AssistantProvider.CLAUDE;
+    private MaterialButton         mBtnClaude;
+    private MaterialButton         mBtnCodex;
+    private TextView               mConfigTitle;
+    private TextView               mConfigPath;
+    private EditText               mModelEdit;
 
     // =========================================================================
 
@@ -50,7 +57,16 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        mStore    = new ApiKeyStore(requireContext());
+        mProvider = new ProviderSettingsStore(requireContext()).getSelectedProvider();
+        mBtnClaude = view.findViewById(R.id.btn_key_provider_claude);
+        mBtnCodex = view.findViewById(R.id.btn_key_provider_codex);
+        mBtnClaude.setOnClickListener(v -> switchProvider(AssistantProvider.CLAUDE));
+        mBtnCodex.setOnClickListener(v -> switchProvider(AssistantProvider.CODEX));
+        mConfigTitle = view.findViewById(R.id.provider_config_title);
+        mConfigPath = view.findViewById(R.id.provider_config_path);
+        mModelEdit = view.findViewById(R.id.provider_model_edit);
+
+        mStore    = new ApiKeyStore(requireContext(), mProvider);
         mEntries  = mStore.loadAll();
         mCountText = view.findViewById(R.id.key_count_text);
 
@@ -61,10 +77,14 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
         recycler.setAdapter(mAdapter);
 
         updateCount();
+        updateProviderButtons();
 
         // 添加按钮
         MaterialButton btnAdd = view.findViewById(R.id.btn_add_key);
         btnAdd.setOnClickListener(v -> showAddDialog());
+        view.findViewById(R.id.btn_apply_provider_config).setOnClickListener(v -> applyProviderConfig());
+        view.findViewById(R.id.btn_edit_raw_provider_config).setOnClickListener(v -> showRawConfigDialog());
+        updateConfigPanel();
     }
 
     // =========================================================================
@@ -79,8 +99,10 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
         // 直接用 Java 文件 I/O 写入 ubuntu ~/.bashrc，不发任何终端命令
         TermuxActivity a = act();
         if (a != null) {
-            a.setActiveApiKey(entry.value, entry.baseUrl);
-            Toast.makeText(getContext(), "已设为当前 Key", Toast.LENGTH_SHORT).show();
+            a.setActiveApiKey(mProvider, entry.value, entry.baseUrl);
+            writeProviderConfig(entry, false);
+            String displayName = ProviderProfile.forProvider(mProvider).displayName;
+            Toast.makeText(getContext(), "已设为当前 " + displayName + " Key", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(getContext(), "已记录", Toast.LENGTH_SHORT).show();
         }
@@ -127,13 +149,18 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
         layout.addView(etKey);
 
         EditText etBaseUrl = new EditText(requireContext());
-        etBaseUrl.setHint("API Base URL（留空 = 官方 Anthropic；第三方填它们的 Anthropic 兼容地址）");
+        if (mProvider == AssistantProvider.CODEX) {
+            etBaseUrl.setHint("API Base URL（可选；当前 Codex CLI 默认使用 OpenAI 官方接口）");
+        } else {
+            etBaseUrl.setHint("API Base URL（留空 = 官方 Anthropic；第三方填 Anthropic 兼容地址）");
+        }
         etBaseUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         etBaseUrl.setSingleLine(true);
         layout.addView(etBaseUrl);
 
+        String displayName = ProviderProfile.forProvider(mProvider).displayName;
         new AlertDialog.Builder(requireContext())
-            .setTitle("添加 API Key")
+            .setTitle("添加 " + displayName + " API Key")
             .setView(layout)
             .setPositiveButton("保存", (d, w) -> {
                 String alias   = etAlias.getText().toString().trim();
@@ -155,6 +182,116 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
     // =========================================================================
     // 工具方法
     // =========================================================================
+
+    private void switchProvider(AssistantProvider provider) {
+        if (mProvider == provider) return;
+
+        mProvider = provider;
+        mStore = new ApiKeyStore(requireContext(), mProvider);
+        mEntries.clear();
+        mEntries.addAll(mStore.loadAll());
+        mAdapter.setActiveId(mStore.getActiveId());
+        updateCount();
+        updateProviderButtons();
+        updateConfigPanel();
+    }
+
+    private void updateProviderButtons() {
+        updateProviderButton(mBtnClaude, mProvider == AssistantProvider.CLAUDE);
+        updateProviderButton(mBtnCodex, mProvider == AssistantProvider.CODEX);
+    }
+
+    private void updateConfigPanel() {
+        if (mConfigTitle == null || mConfigPath == null || mModelEdit == null) return;
+        ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+        mConfigTitle.setText(profile.displayName + " CLI 配置");
+        mConfigPath.setText(mProvider == AssistantProvider.CODEX
+            ? "/home/codex/.codex/config.toml"
+            : "/home/claude/.claude/settings.json");
+        mModelEdit.setHint(mProvider == AssistantProvider.CODEX
+            ? "Model（例如 gpt-5-codex，可选）"
+            : "Model（例如 claude-sonnet-4，可选）");
+    }
+
+    private void applyProviderConfig() {
+        ApiKeyStore.Entry entry = activeEntry();
+        if (entry == null) {
+            Toast.makeText(getContext(), "请先激活一个 Key", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        writeProviderConfig(entry, true);
+    }
+
+    private void writeProviderConfig(ApiKeyStore.Entry entry, boolean showToast) {
+        if (entry == null || getContext() == null) return;
+        ProviderConfigManager.ProviderConfig config =
+            new ProviderConfigManager.ProviderConfig(
+                entry.value,
+                entry.baseUrl,
+                mModelEdit == null ? "" : mModelEdit.getText().toString().trim());
+        try {
+            if (mProvider == AssistantProvider.CODEX) {
+                ProviderConfigManager.writeCodexConfig(requireContext(), config);
+            } else {
+                ProviderConfigManager.writeClaudeSettings(requireContext(), config);
+            }
+            if (showToast) Toast.makeText(getContext(), "配置已写入 CLI 文件", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(getContext(), "配置写入失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showRawConfigDialog() {
+        if (getContext() == null) return;
+        EditText editor = new EditText(requireContext());
+        editor.setMinLines(12);
+        editor.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
+        editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        editor.setSingleLine(false);
+        int pad = dp(12);
+        editor.setPadding(pad, pad, pad, pad);
+        try {
+            editor.setText(ProviderConfigManager.readRaw(requireContext(), mProvider));
+        } catch (Exception e) {
+            editor.setText("");
+        }
+        new AlertDialog.Builder(requireContext())
+            .setTitle(mProvider == AssistantProvider.CODEX
+                ? "编辑 config.toml" : "编辑 settings.json")
+            .setView(editor)
+            .setPositiveButton("保存", (d, w) -> {
+                try {
+                    ProviderConfigManager.writeRaw(requireContext(), mProvider,
+                        editor.getText().toString());
+                    Toast.makeText(getContext(), "已保存，原文件已备份", Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    Toast.makeText(getContext(), "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private ApiKeyStore.Entry activeEntry() {
+        String activeId = mStore == null ? null : mStore.getActiveId();
+        if (activeId == null) return null;
+        for (ApiKeyStore.Entry entry : mEntries) {
+            if (activeId.equals(entry.id)) return entry;
+        }
+        return null;
+    }
+
+    private void updateProviderButton(MaterialButton button, boolean selected) {
+        int blue = 0xFF1976D2;
+        int white = 0xFFFFFFFF;
+        int background = selected ? blue : white;
+        int text = selected ? white : blue;
+
+        button.setBackgroundTintList(ColorStateList.valueOf(background));
+        button.setStrokeColor(ColorStateList.valueOf(blue));
+        button.setTextColor(text);
+    }
 
     private void updateCount() {
         int n = mEntries.size();

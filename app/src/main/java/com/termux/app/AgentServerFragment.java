@@ -39,7 +39,6 @@ import java.util.regex.Pattern;
 public class AgentServerFragment extends Fragment {
 
     private static final String PREFS_NAME        = "agentserver_config";
-    private static final String PROOT_USER        = "claude";  // non-root user inside Ubuntu proot
     private static final String KEY_SERVER_URL    = "server_url";
     private static final String KEY_SANDBOX_CODE  = "sandbox_code";
     private static final String KEY_DEVICE_NAME   = "device_name";
@@ -47,6 +46,7 @@ public class AgentServerFragment extends Fragment {
 
     private TextView  mStatusText;
     private TextView  mInfoText;
+    private TextView  mProviderText;
     private EditText  mUrlEdit;
     private EditText  mCodeEdit;
     private EditText  mDeviceNameEdit;
@@ -59,6 +59,7 @@ public class AgentServerFragment extends Fragment {
     private String mLastSandboxId = "";  // 上次成功连接的沙盒 ID，用于 --resume
     private boolean mConnected = false;       // 本次 connect 是否成功建立 tunnel
     private boolean mRetryWithoutResume = false; // 401 后重试（不带 --resume）
+    private AssistantProvider mProvider = AssistantProvider.CLAUDE;
 
     // OAuth Device Flow 授权弹窗：每次 doConnect 重置；同一次连接只弹一次
     private AlertDialog mAuthDialog;
@@ -83,6 +84,7 @@ public class AgentServerFragment extends Fragment {
 
         mStatusText    = v.findViewById(R.id.agentserver_status_text);
         mInfoText      = v.findViewById(R.id.agentserver_info);
+        mProviderText  = v.findViewById(R.id.agentserver_provider_text);
         mUrlEdit       = v.findViewById(R.id.agentserver_url);
         mCodeEdit      = v.findViewById(R.id.agentserver_code);
         mDeviceNameEdit = v.findViewById(R.id.agentserver_device_name);
@@ -103,6 +105,7 @@ public class AgentServerFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
+        refreshProviderFromSettings();
     }
 
     @Override
@@ -120,22 +123,36 @@ public class AgentServerFragment extends Fragment {
     // ─────────────────────────────────────────────────────────────────────────
 
     private void checkStatus() {
+        refreshProviderFromSettings();
         String prefix  = System.getenv("PREFIX");
         if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
-        String logFile = prefix + "/../home/agentserver-agent.log";
+        String logFile = agentLogFile(prefix, mProvider);
+        ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+        String processPattern = AgentServerCommandBuilder.processPattern(mProvider);
 
         String script =
             "if ! command -v proot-distro >/dev/null 2>&1; then\n" +
             "  echo '[!] proot-distro 未找到，Ubuntu 环境尚未初始化'; exit 1\n" +
             "fi\n" +
-            "if ! proot-distro login --user " + PROOT_USER + " ubuntu -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
+            "agentserver_pids() {\n" +
+            "  pattern=\"$1\"\n" +
+            "  pgrep -f \"$pattern\" 2>/dev/null | while read -r p; do\n" +
+            "    [ \"$p\" = \"$$\" ] && continue\n" +
+            "    args=$(ps -p \"$p\" -o args= 2>/dev/null || true)\n" +
+            "    printf '%s\\n' \"$args\" | grep -Eq 'bash -c|proot-distro login' && continue\n" +
+            "    echo \"$p\"\n" +
+            "  done\n" +
+            "}\n" +
+            "if ! proot-distro login --user " + profile.user + " ubuntu -- sh -c 'command -v agentserver >/dev/null 2>&1'; then\n" +
             "  echo '[!] AgentServer 未安装'; exit 1\n" +
             "fi\n" +
-            "echo \"版本: $(proot-distro login --user " + PROOT_USER + " ubuntu -- agentserver version 2>/dev/null)\"\n" +
+            "echo \"当前助手: " + profile.displayName + "\"\n" +
+            "echo \"版本: $(proot-distro login --user " + profile.user + " ubuntu -- agentserver version 2>/dev/null)\"\n" +
             "echo ''\n" +
-            "if pgrep -f 'agentserver' >/dev/null 2>&1; then\n" +
+            "pids=$(agentserver_pids '" + processPattern + "')\n" +
+            "if [ -n \"$pids\" ]; then\n" +
             "  echo '[*] Agent 运行中'\n" +
-            "  pgrep -a -f 'agentserver' 2>/dev/null | grep -v grep | head -5\n" +
+            "  printf '%s\\n' \"$pids\" | head -5 | while read -r p; do ps -p \"$p\" -o pid=,args= 2>/dev/null; done\n" +
             "else\n" +
             "  echo '[-] Agent 未运行'\n" +
             "fi\n" +
@@ -151,6 +168,7 @@ public class AgentServerFragment extends Fragment {
      * 连接成功后从日志解析 sandbox ID 并持久化，下次用 --resume 复用同一沙盒。
      */
     private void doConnect() {
+        refreshProviderFromSettings();
         mConnected = false;
         mRetryWithoutResume = false;
         String url    = mUrlEdit.getText().toString().trim();
@@ -164,7 +182,8 @@ public class AgentServerFragment extends Fragment {
 
         // 从 ApiKeyStore 读取激活的 API Key，直接注入 agentserver 进程环境
         // （proot-distro 不走 login shell，.bashrc 不会自动 source，必须显式传入）
-        ApiKeyStore keyStore = new ApiKeyStore(requireContext());
+        ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+        ApiKeyStore keyStore = new ApiKeyStore(requireContext(), mProvider);
         String activeId = keyStore.getActiveId();
         String apiKey = "", apiBaseUrl = "";
         if (activeId != null) {
@@ -172,67 +191,21 @@ public class AgentServerFragment extends Fragment {
                 if (e.id.equals(activeId)) { apiKey = e.value; apiBaseUrl = e.baseUrl; break; }
             }
         }
-        String envPrefix = "";
-        if (!apiKey.isEmpty()) {
-            envPrefix = "ANTHROPIC_API_KEY='" + apiKey.replace("'", "'\\''") + "' ";
-            if (!apiBaseUrl.isEmpty())
-                envPrefix += "ANTHROPIC_BASE_URL='" + apiBaseUrl.replace("'", "'\\''") + "' ";
+        if (apiKey.isEmpty()) {
+            Toast.makeText(getContext(),
+                "请先激活 " + profile.displayName + " API Key",
+                Toast.LENGTH_SHORT).show();
+            return;
         }
 
         String prefix   = System.getenv("PREFIX");
         if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
-        String home     = prefix + "/../home";
-        String logFile  = home + "/agentserver-agent.log";
-        String pipeFile = prefix + "/var/lib/proot-distro/installed-rootfs/ubuntu/home/claude/.agentserver-pipe.jsonl";
-        String pdBin    = prefix + "/bin/proot-distro";
-        String safeUrl  = url.replace("'", "'\\''");
-        String nameFlag = device.isEmpty() ? "" : " --name '" + device.replace("'", "'\\''") + "'";
 
         // 优先级：用户手填沙盒 ID > 上次自动保存的 ID > 不传（首次新建）
         String resumeId = !code.isEmpty() ? code : mLastSandboxId;
-        String resumeFlag = resumeId.isEmpty() ? "" : " --resume '" + resumeId.replace("'", "'\\''") + "'";
-
-        String agentArgs = "claudecode --server '" + safeUrl + "'" + resumeFlag + nameFlag + " --skip-open-browser";
-        final String finalEnvPrefix = envPrefix;
-
-        String script =
-            // pgrep 排除当前 bash 自身（$$），避免 pkill -f 因 cmdline 包含 'agentserver claudecode' 把自己杀掉（exit 143）
-            "for _p in $(pgrep -f 'agentserver claudecode' 2>/dev/null);" +
-            " do [ \"$_p\" != \"$$\" ] && kill \"$_p\" 2>/dev/null; done; sleep 1\n" +
-            "> '" + logFile + "'\n" +          // 清空旧日志，避免历史内容干扰状态检测
-            "> '" + pipeFile + "' 2>/dev/null || true\n" +  // 截断主 pipe（任务归档已在 App 私有目录里，此处只清运行时缓冲）
-            "echo '[*] 正在启动 AgentServer...'\n" +
-            // bash -c 包裹：显式传入 ANTHROPIC_API_KEY（来自 ApiKeyStore）+ 兜底 source .bashrc
-            // 说明：
-            // - 这里用绝对路径启动 /usr/local/bin/agentserver，避免 PATH 不完整导致 “not found”
-            // - 同时把 ~/.local/bin 放到 PATH 前面，确保 AgentServer 触发的 claude 调用走 wrapper（写 pipe）
-            "nohup '" + pdBin + "' login --user " + PROOT_USER + " ubuntu -- bash -c" +
-            " \". /home/claude/.bashrc 2>/dev/null; export PATH=/home/claude/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " + finalEnvPrefix + "exec /usr/local/bin/agentserver " + agentArgs + "\"" +
-            " >> '" + logFile + "' 2>&1 &\n" +
-            "AS_PID=$!\n" +
-            "echo '[*] AgentServer 已启动，等待 OAuth 授权 + tunnel 建立（最多 180s）...'\n" +
-            // tail -F 把日志新增行实时输出到 stdout（→ runScript line callback），
-            // 看门狗子进程检测到关键事件（tunnel 建立 / 鉴权失败）就 kill tail，让脚本退出。
-            // 没有事件时由 timeout 180 兜底，避免脚本无限挂起。
-            "timeout 180 tail -F -n +1 '" + logFile + "' 2>/dev/null &\n" +
-            "TAIL_PID=$!\n" +
-            "( while kill -0 $TAIL_PID 2>/dev/null; do\n" +
-            "    if grep -qE 'tunnel connected|Failed to load session|session not found|got 401|status code 101 but got' '" + logFile + "' 2>/dev/null; then\n" +
-            "      sleep 1\n" +    // 留 1 秒让 tail 把最后一行输出到 stdout（→ runScript callback）
-            "      kill $TAIL_PID 2>/dev/null\n" +
-            "      break\n" +
-            "    fi\n" +
-            "    sleep 1\n" +
-            "  done ) &\n" +
-            "WATCHER_PID=$!\n" +
-            "wait $TAIL_PID 2>/dev/null\n" +
-            "kill $WATCHER_PID 2>/dev/null\n" +
-            "echo ''\n" +
-            "if kill -0 $AS_PID 2>/dev/null; then\n" +
-            "  echo \"[*] Agent 进程运行中（PID: $AS_PID）\"\n" +
-            "else\n" +
-            "  echo '[!] Agent 进程已退出'\n" +
-            "fi\n";
+        AgentServerCommandBuilder.Config cfg = new AgentServerCommandBuilder.Config(
+            url, resumeId, device, apiKey, apiBaseUrl);
+        String script = AgentServerCommandBuilder.connectScript(mProvider, cfg, prefix);
 
         // 重置授权弹窗状态（每次 doConnect 视为新的一次授权流程）
         mAuthDialogShown = false;
@@ -296,16 +269,17 @@ public class AgentServerFragment extends Fragment {
 
     /**
      * 实时监控：快照两个日志文件最近内容，然后 tail -f 跟踪新增行。
-     * - agentserver-agent.log：agentserver 收到的任务描述 + Claude Code 的完整输出
+     * - agentserver-*.log：agentserver 收到的任务描述 + 当前助手的完整输出
      * - mcp-audit.log：MCP 工具调用审计（Claude 对手机做了什么操作）
      * 点击任意其他按钮（或 onDestroyView）会自动停止跟踪。
      */
     private void doMonitor() {
+        refreshProviderFromSettings();
         mMonitoring = true;
         String prefix = System.getenv("PREFIX");
         if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
         String home     = prefix + "/../home";
-        String agentLog = home + "/agentserver-agent.log";
+        String agentLog = agentLogFile(prefix, mProvider);
         String mcpLog   = home + "/mcp-audit.log";
 
         String script =
@@ -371,10 +345,12 @@ public class AgentServerFragment extends Fragment {
 
     /** 停止后台运行的 Agent（在 Termux 层 kill，不进入 proot）。 */
     private void doStop() {
+        refreshProviderFromSettings();
         mConnected = false;
+        String pattern = AgentServerCommandBuilder.processPattern(mProvider);
         runScript(
-            "pkill -f 'proot-distro.*login ubuntu' 2>/dev/null && echo '[*] Agent 已断开连接'" +
-            " || echo '[!] 未找到运行中的 Agent 进程'",
+            "for _p in $(pgrep -f '" + pattern + "' 2>/dev/null); do [ \"$_p\" != \"$$\" ] && kill \"$_p\" 2>/dev/null; done\n" +
+            "echo '[*] 当前助手 Agent 已断开连接'",
             "断开连接", null
         );
     }
@@ -465,6 +441,9 @@ public class AgentServerFragment extends Fragment {
             if (missingBinary) {
                 setStatus("● 未安装", "#888888");
                 setInfo("AgentServer 未安装，请重启应用等待自动安装");
+            } else if (log.contains("不支持 Codex") || log.contains("does not support Codex")) {
+                setStatus("● 不支持", "#E53935");
+                setInfo("当前 AgentServer 不支持 Codex 后端，请更新 AgentServer addon 或切回 Claude");
             } else if (badServer) {
                 setStatus("● 失败", "#E53935");
                 setInfo("连接失败：服务器地址可能不对（404 Not Found），请检查 URL 是否为 agentserver 的根地址");
@@ -478,7 +457,11 @@ public class AgentServerFragment extends Fragment {
             return;
         }
 
-        if (mConnected) {
+        String log = mLogText.getText().toString();
+        if (log.contains("不支持 Codex") || log.contains("does not support Codex")) {
+            setStatus("● 不支持", "#E53935");
+            setInfo("当前 AgentServer 不支持 Codex 后端，请更新 AgentServer addon 或切回 Claude");
+        } else if (mConnected) {
             setStatus("● 已连接", "#388E3C");
             setInfo("AgentServer 已连接到服务器" +
                 (mLastSandboxId.isEmpty() ? "" : "（沙盒: " + mLastSandboxId.substring(0, 8) + "...）"));
@@ -570,6 +553,7 @@ public class AgentServerFragment extends Fragment {
         mCodeEdit.setText(p.getString(KEY_SANDBOX_CODE, ""));
         mDeviceNameEdit.setText(p.getString(KEY_DEVICE_NAME, ""));
         mLastSandboxId = p.getString(KEY_SANDBOX_ID, "");
+        refreshProviderFromSettings();
     }
 
     private void savePrefs() {
@@ -596,5 +580,21 @@ public class AgentServerFragment extends Fragment {
 
     private void post(Runnable r) {
         if (getActivity() != null) getActivity().runOnUiThread(r);
+    }
+
+    private void refreshProviderFromSettings() {
+        if (getContext() == null) return;
+        mProvider = new ProviderSettingsStore(requireContext()).getSelectedProvider();
+        if (mProviderText != null) {
+            ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+            mProviderText.setText("当前助手：" + profile.displayName + "（切换后需重新连接）");
+        }
+    }
+
+    private static String agentLogFile(String prefix, AssistantProvider provider) {
+        String home = prefix + "/../home";
+        return home + (provider == AssistantProvider.CODEX
+            ? "/agentserver-codex-agent.log"
+            : "/agentserver-agent.log");
     }
 }

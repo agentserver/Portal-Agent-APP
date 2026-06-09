@@ -57,12 +57,21 @@
                 android:id="@+id/agentserver_info"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
+                android:layout_marginBottom="6dp"
                 android:background="#F8F8F8"
                 android:padding="10dp"
                 android:text="正在检查 AgentServer 状态..."
                 android:textColor="#555555"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/agentserver_provider_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="当前助手：Claude Code"
+                android:textColor="#666666"
+                android:textSize="12sp" />
 
             <!-- 服务器地址 -->
             <TextView

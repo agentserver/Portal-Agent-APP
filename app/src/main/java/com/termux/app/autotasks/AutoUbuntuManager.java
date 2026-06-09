@@ -50,6 +50,7 @@ public class AutoUbuntuManager {
 
     private final TermuxActivity mActivity;
     private AutoAgentServerManager mAgentServerManager;
+    private AutoLoomManager mLoomManager;
     private boolean mAutoLaunchAttempted;
     private boolean mEnabled = true;
 
@@ -68,6 +69,11 @@ public class AutoUbuntuManager {
         mAgentServerManager = mgr;
     }
 
+    /** 注入 Loom 管理器引用，用于复制离线 Loom addon。 */
+    public void setLoomManager(@NonNull AutoLoomManager mgr) {
+        mLoomManager = mgr;
+    }
+
     public void setEnabled(boolean enabled) {
         mEnabled = enabled;
     }
@@ -84,10 +90,14 @@ public class AutoUbuntuManager {
 
         mAutoLaunchAttempted = true;
 
-        // 快速路径：rootfs 已存在，直接进入配置 + 登录（后台线程避免主线程阻塞）
-        if (new File(UbuntuSnapshotManager.UBUNTU_ROOTFS).isDirectory()) {
+        // 快速路径：rootfs 完整可用，直接进入配置 + 登录（后台线程避免主线程阻塞）。
+        File ubuntuRootfs = new File(UbuntuSnapshotManager.UBUNTU_ROOTFS);
+        if (UbuntuSnapshotManager.isRootfsUsable()) {
             new Thread(() -> launchSetupScript(session), "ubuntu-setup").start();
             return;
+        }
+        if (ubuntuRootfs.exists()) {
+            writeEcho(session, "[!] 检测到不完整 Ubuntu rootfs，将重新部署...");
         }
 
         // rootfs 缺失：后台尝试快照部署，完成后再运行安装脚本
@@ -137,6 +147,77 @@ public class AutoUbuntuManager {
         };
     }
 
+    static String buildRootfsGuardShellForTest() {
+        return buildRootfsGuardShell();
+    }
+
+    static String buildProotDistroPatchShellForTest() {
+        return buildProotDistroPatchShell();
+    }
+
+    static String buildProviderLoginDispatcherForTest() {
+        return buildProviderLoginDispatcherFileContent(buildProviderFilePathForUbuntu());
+    }
+
+    static String buildProviderFilePathForUbuntuForTest() {
+        return buildProviderFilePathForUbuntu();
+    }
+
+    private static String buildProviderFilePathForUbuntu() {
+        return TermuxConstants.TERMUX_HOME_DIR_PATH + "/.assistant-provider";
+    }
+
+    private static String buildRootfsGuardShell() {
+        return "_ubuntu_rootfs=\"$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\"; "
+            + "ubuntu_rootfs_ok(){ "
+            + "[ -d \"$_ubuntu_rootfs\" ] && "
+            + "[ -f \"$_ubuntu_rootfs/etc/passwd\" ] && "
+            + "[ -f \"$_ubuntu_rootfs/etc/os-release\" ] && "
+            + "[ -d \"$_ubuntu_rootfs/usr\" ] && "
+            + "[ -f \"$_ubuntu_rootfs/usr/bin/env\" ] && "
+            + "{ [ -e \"$_ubuntu_rootfs/bin/sh\" ] || [ -e \"$_ubuntu_rootfs/usr/bin/sh\" ]; }; "
+            + "}; "
+            + "if [ -d \"$_ubuntu_rootfs\" ] && ! ubuntu_rootfs_ok; then "
+            + "echo \"[!] Incomplete Ubuntu rootfs detected, reinstalling...\"; "
+            + "rm -rf \"$_ubuntu_rootfs\" || auto_ok=0; "
+            + "fi; ";
+    }
+
+    private static String buildProotDistroPatchShell() {
+        return "if [ \"$auto_ok\" = \"1\" ]; then "
+            + "pd_bin=$(command -v proot-distro 2>/dev/null); "
+            + "[ -n \"$pd_bin\" ] && [ -f \"$pd_bin\" ] && { "
+            + "sed -i 's/set -e -u/set -e/g' \"$pd_bin\" 2>/dev/null; "
+            + "sed -i 's/set -euo/set -eo/g' \"$pd_bin\" 2>/dev/null; "
+            + "sed -i 's/set -uo/set -o/g'   \"$pd_bin\" 2>/dev/null; "
+            + "sed -i 's/local cpu_arch$/local cpu_arch=\"\"/' \"$pd_bin\" 2>/dev/null; "
+            + "echo \"[*] proot-distro patched (nounset disabled + cpu_arch initialized).\"; }; "
+            + "case \"$(uname -m)\" in "
+            + "aarch64) export cpu_arch=aarch64 ;; "
+            + "armv7*|armv8l) export cpu_arch=arm ;; "
+            + "x86_64) export cpu_arch=x86_64 ;; "
+            + "i*86) export cpu_arch=i686 ;; "
+            + "*) export cpu_arch=$(uname -m) ;; "
+            + "esac; "
+            + "echo \"[*] cpu_arch=$cpu_arch\"; "
+            + "fi; ";
+    }
+
+    private static String buildProviderLoginDispatcherFileContent(String providerFile) {
+        return "#!/bin/sh\n"
+            + "_provider_file=\"" + providerFile + "\"\n"
+            + "_provider=claude\n"
+            + "[ -f \"$_provider_file\" ] && _provider=$(cat \"$_provider_file\" 2>/dev/null | head -n 1)\n"
+            + "case \"$_provider\" in\n"
+            + "  codex) exec su - codex ;;\n"
+            + "  *) exec su - claude ;;\n"
+            + "esac\n";
+    }
+
+    private static String buildProviderLoginDispatcherHook() {
+        return "[ -f ~/.assistant-login-dispatcher.sh ] && . ~/.assistant-login-dispatcher.sh";
+    }
+
     /**
      * 向 Ubuntu rootfs /root/ 注入三项内容（每次启动更新，幂等）：
      *   1. CLAUDE.md          — Claude Code 自动读取的能力说明
@@ -151,7 +232,8 @@ public class AutoUbuntuManager {
         if (!claudeHome.isDirectory()) return;
 
         // 1. CLAUDE.md — Claude Code 读取当前工作目录的 CLAUDE.md
-        writeFile(new File(claudeHome, "CLAUDE.md"), buildClaudeMdContent());
+        writeFile(new File(claudeHome, "CLAUDE.md"),
+            AndroidCapabilityPromptBuilder.buildClaudeInstructions());
 
         // 2. /phone skill
         File commandsDir = new File(claudeHome, ".claude/commands");
@@ -165,6 +247,21 @@ public class AutoUbuntuManager {
         //    把任务 prompt 和 JSONL 输出写入 ~/.agentserver-pipe.jsonl，
         //    供 Android App 实时显示 AgentServer 任务执行过程。
         injectClaudeWrapper(claudeHome);
+    }
+
+    private void injectProviderInstructions() {
+        injectClaudeMd();
+
+        File codexHome = new File(UbuntuSnapshotManager.UBUNTU_ROOTFS + "/home/codex");
+        if (!codexHome.isDirectory()) return;
+
+        writeFile(new File(codexHome, "AGENTS.md"),
+            AndroidCapabilityPromptBuilder.buildCodexInstructions());
+
+        File skillDir = new File(codexHome, ".codex/skills/android-phone");
+        skillDir.mkdirs();
+        writeFile(new File(skillDir, "SKILL.md"),
+            AndroidCapabilityPromptBuilder.buildCodexAndroidSkill());
     }
 
     /**
@@ -300,85 +397,20 @@ public class AutoUbuntuManager {
         } catch (Exception ignored) {}
     }
 
-    private static String buildClaudeMdContent() {
-        return "# 运行环境\n\n"
-            + "你正在一台 Android 手机的 Ubuntu proot 容器中运行，"
-            + "拥有通过 MCP 工具直接控制宿主 Android 系统的能力。\n"
-            + "当用户要求操作手机、打开应用、截图、输入内容等任务时，"
-            + "**直接调用下列工具完成，无需询问是否有能力**。\n\n"
-
-            + "## MCP 工具（android-mcp，已自动注册）\n\n"
-
-            + "### UI 控制（需无障碍服务权限）\n"
-            + "- `ui.tap` — 点击屏幕坐标 `{x, y}`\n"
-            + "- `ui.swipe` — 滑动 `{x1,y1}→{x2,y2}`，可指定时长(ms)\n"
-            + "- `ui.click_text` — 点击屏幕上包含指定文字的元素\n"
-            + "- `ui.input_text` — 向当前焦点输入框输入文字\n"
-            + "- `ui.get_accessibility_tree` — 获取当前屏幕 UI 元素树（用于分析界面、定位元素）\n\n"
-
-            + "### 截图与摄像头\n"
-            + "- `screen.capture` — 截取当前屏幕，返回 base64 JPEG\n"
-            + "- `camera.take_photo` — 用后置摄像头拍照，返回 base64 JPEG\n\n"
-
-            + "**⚠️ 关于截屏的硬性规则（违反会浪费大量 context 且得到错误结果）：**\n\n"
-            + "1. **`screen.capture` 是获取当前屏幕的唯一正确方式**——这是手机 App 通过 Android `MediaProjection` API 实时截屏的接口。\n"
-            + "2. **proot 容器内任何 Linux 截屏工具都会失败**，无需尝试：\n"
-            + "   - `scrot` / `grim` / `import` / `gnome-screenshot` — 容器无 X server / Wayland，必败\n"
-            + "   - `screencap`（Android 原生命令）— 普通用户无帧缓冲权限，必败\n"
-            + "   - `adb shell` — 容器内无 adb 客户端，必败\n"
-            + "   - 注入按键模拟系统截屏 — 需要无障碍权限叠加，绕远路且失败率高\n"
-            + "3. **`/sdcard/Pictures/Screenshots/` 是用户历史截图，不是当前屏幕**——绝不能把目录里最新的图当作当前屏幕反馈给用户，这会给出错误信息。\n"
-            + "4. **若 `screen.capture` 返回 \"Screen capture permission not granted\"**：\n"
-            + "   - **立即停止尝试任何替代方案**\n"
-            + "   - 用 `mcp__agentserver__send_message` 或直接回复，明确告诉用户：\n"
-            + "     > 截屏权限未授予，请打开手机 App 主页，点击「授权截图」按钮后重试。\n"
-            + "   - 等待用户授权后再调用一次 `screen.capture`\n\n"
-
-            + "### 文件操作\n"
-            + "- `file.read` — 读取文件内容\n"
-            + "- `file.list` — 列出目录内容\n"
-            + "- `file.check_exists` — 检查路径是否存在\n\n"
-
-            + "### App 管理\n"
-            + "- `app.open` — 通过包名启动应用（如 `com.android.chrome`）\n"
-            + "- `app.get_current_activity` — 获取当前前台 Activity 名称\n\n"
-
-            + "### 系统状态\n"
-            + "- `android.get_status` — 获取权限状态与工具可用性\n\n"
-
-            + "## Android 传感器数据（HTTP 直接调用）\n\n"
-            + "```bash\n"
-            + "curl http://127.0.0.1:" + ApiHttpBridgeServer.PORT + "/battery    # 电池状态\n"
-            + "curl http://127.0.0.1:" + ApiHttpBridgeServer.PORT + "/wifi       # WiFi 信息\n"
-            + "curl http://127.0.0.1:" + ApiHttpBridgeServer.PORT + "/sensors    # 传感器列表\n"
-            + "curl http://127.0.0.1:" + ApiHttpBridgeServer.PORT + "/camera     # 摄像头信息\n"
-            + "curl http://127.0.0.1:" + ApiHttpBridgeServer.PORT + "/clipboard  # 剪贴板内容\n"
-            + "```\n\n"
-
-            + "## 操作手机的推荐流程\n\n"
-            + "1. `screen.capture` 观察当前屏幕\n"
-            + "2. `ui.get_accessibility_tree` 分析 UI 结构，找到目标元素\n"
-            + "3. `ui.click_text` / `ui.tap` 点击，`ui.input_text` 输入\n"
-            + "4. 再次截图确认结果，循环直到任务完成\n\n"
-
-            + "## 记忆系统\n\n"
-            + "**当用户要求「记住」某件事时，必须遵守以下规则：**\n\n"
-            + "- 将记忆保存为独立 `.md` 文件，路径：`~/.claude/memory/<描述性名称>.md`\n"
-            + "- 文件名用英文小写+下划线，如 `user_preference.md`、`api_key.md`\n"
-            + "- **不要修改 `~/CLAUDE.md`**（该文件由系统自动管理，每次启动会被覆盖）\n"
-            + "- 每次对话开始时，可读取 `~/.claude/memory/` 目录下的文件了解用户偏好\n";
-    }
-
     /** 向终端 stdin 写一条 echo 命令（shell 会立即执行并显示输出）。 */
     private static void writeEcho(TerminalSession session, String msg) {
         String safe = msg.replace("'", "'\\''");
         session.write("echo '" + safe + "'\n");
     }
 
+    private static String shellSingleQuoteForScript(String value) {
+        return (value == null ? "" : value).replace("'", "'\\''");
+    }
+
     /** 等待 assets 准备完毕，然后向终端写入安装脚本命令。 */
     private void launchSetupScript(TerminalSession session) {
-        // 每次启动都写入/更新 CLAUDE.md，让 Claude Code 知道它的 Android 能力
-        injectClaudeMd();
+        // 每次启动都写入/更新 provider instructions，让 agents 知道它们的 Android 能力
+        injectProviderInstructions();
 
         // 若后台提取仍在进行，最多等待 5 秒，超时则放弃本地包走网络
         if (!mExtractionDone) {
@@ -390,6 +422,10 @@ public class AutoUbuntuManager {
         // 等待 AgentServer asset 提取完成（最多 5 秒），避免 cp 时文件不存在被静默跳过
         if (mAgentServerManager != null) {
             mAgentServerManager.awaitExtraction(5000);
+        }
+        // 等待 Loom asset 提取完成（最多 5 秒），避免复制时错过离线 addon
+        if (mLoomManager != null) {
+            mLoomManager.awaitExtraction(5000);
         }
         // 脚本写入临时文件再执行，避免超长单行命令超出 pty 输入缓冲区（N_TTY_BUF_SIZE=4096）被截断
         String scriptPath = writeScriptToFile();
@@ -707,25 +743,12 @@ public class AutoUbuntuManager {
           .append("fi; ");
 
         // ── Step 2: 安装 Ubuntu rootfs ────────────────────────────────────────
-        sb.append("if [ \"$auto_ok\" = \"1\" ] && ")
-          .append("[ ! -d \"$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\" ]; then ")
+        // proot-distro 补丁必须每次 setup 都执行：离线快照路径会提前创建 rootfs，
+        // 不能把补丁绑定在“安装 rootfs”分支里。
+        sb.append(buildProotDistroPatchShell());
+        sb.append(buildRootfsGuardShell());
+        sb.append("if [ \"$auto_ok\" = \"1\" ] && ! ubuntu_rootfs_ok; then ")
           .append("echo \"[*] Installing Ubuntu...\"; ")
-          // 不再 apt-get upgrade proot/proot-distro——版本已通过 assets 打包锁定
-          // proot-distro 4.38 自身仍有 "cpu_arch: unbound variable" bug，需要 patch
-          .append("pd_bin=$(command -v proot-distro 2>/dev/null); ")
-          .append("[ -n \"$pd_bin\" ] && [ -f \"$pd_bin\" ] && { ")
-          .append("sed -i 's/set -euo/set -eo/g' \"$pd_bin\" 2>/dev/null; ")
-          .append("sed -i 's/set -uo/set -o/g' \"$pd_bin\" 2>/dev/null; ")
-          .append("echo \"[*] proot-distro patched (removed -u).\"; }; ")
-          // 同时 export cpu_arch 作为兜底：对未用 local 声明的旧版 proot-distro 仍有效
-          .append("case \"$(uname -m)\" in ")
-          .append("aarch64) export cpu_arch=aarch64 ;; ")
-          .append("armv7*|armv8l) export cpu_arch=arm ;; ")
-          .append("x86_64) export cpu_arch=x86_64 ;; ")
-          .append("i*86) export cpu_arch=i686 ;; ")
-          .append("*) export cpu_arch=$(uname -m) ;; ")
-          .append("esac; ")
-          .append("echo \"[*] cpu_arch=$cpu_arch\"; ")
           .append("ubuntu_ok=0; ");
 
         // 2a: 优先本地预置包
@@ -772,20 +795,31 @@ public class AutoUbuntuManager {
         // inner 脚本首行检查 claude 是否已安装——已装则自我清除，未装则交互引导。
         String claudeInnerPath = new File(mActivity.getFilesDir(),
             AutoClaudeManager.INNER_SCRIPT_REL).getAbsolutePath();
+        String codexInnerPath = new File(mActivity.getFilesDir(),
+            AutoCodexManager.INNER_SCRIPT_REL).getAbsolutePath();
         String capabilitiesPath = new File(mActivity.getFilesDir(),
             CapabilitiesManager.CAPABILITIES_FILE_REL).getAbsolutePath();
+        String providerFilePath = buildProviderFilePathForUbuntu();
         String agentTgzPath = new File(mActivity.getFilesDir(),
             AutoAgentServerManager.ASSET_TGZ_REL).getAbsolutePath();
         String agentInnerPath = new File(mActivity.getFilesDir(),
             AutoAgentServerManager.INNER_SCRIPT_REL).getAbsolutePath();
+        String loomTgzPath = mLoomManager == null ? "" : mLoomManager.getTgzPath();
+        String loomInnerPath = mLoomManager == null ? "" : mLoomManager.getInnerScriptPath();
         sb.append("if [ \"$auto_ok\" = \"1\" ]; then ")
           .append("_ubr=\"$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\"; ")
           .append("_cis=\"").append(claudeInnerPath).append("\"; ")
+          .append("_cxis=\"").append(codexInnerPath).append("\"; ")
           .append("if [ -d \"$_ubr/root\" ]; then ")
           // 注入 claude 安装向导
           .append("[ -f \"$_cis\" ] && cp \"$_cis\" \"$_ubr/root/.claude-setup.sh\" && ")
           .append("{ grep -qF '.claude-setup' \"$_ubr/root/.bashrc\" 2>/dev/null || ")
           .append("printf '\\n[ -f ~/.claude-setup.sh ] && . ~/.claude-setup.sh\\n' ")
+          .append(">> \"$_ubr/root/.bashrc\"; }; ")
+          // 注入 Codex 安装向导（默认终端仍切换 claude，后续 provider 路由显式以 codex 用户运行）
+          .append("[ -f \"$_cxis\" ] && cp \"$_cxis\" \"$_ubr/root/.codex-setup.sh\" && ")
+          .append("{ grep -qF '.codex-setup' \"$_ubr/root/.bashrc\" 2>/dev/null || ")
+          .append("printf '\\n[ -f ~/.codex-setup.sh ] && . ~/.codex-setup.sh\\n' ")
           .append(">> \"$_ubr/root/.bashrc\"; }; ")
           // 注入 AgentServer 安装包 + 安装向导（在 Claude hook 之后，确保安装时 Claude 已就绪）
           .append("if [ -f \"").append(agentTgzPath).append("\" ] && [ -s \"").append(agentTgzPath).append("\" ]; then ")
@@ -798,9 +832,25 @@ public class AutoUbuntuManager {
           .append("{ grep -qF '.agentserver-setup' \"$_ubr/root/.bashrc\" 2>/dev/null || ")
           .append("printf '\\n[ -f ~/.agentserver-setup.sh ] && . ~/.agentserver-setup.sh\\n' ")
           .append(">> \"$_ubr/root/.bashrc\"; }; ")
-          // root/.bashrc 末尾注入 exec su - claude（幂等），使终端自动切换为 claude 用户
-          .append("{ grep -qF 'exec su - claude' \"$_ubr/root/.bashrc\" 2>/dev/null || ")
-          .append("printf '\\nexec su - claude\\n' >> \"$_ubr/root/.bashrc\"; }; ")
+          // 注入 Loom addon + 安装向导（独立于 AgentServer 包，复用同一个 Ubuntu runtime）
+          .append("if [ -n \"").append(loomTgzPath).append("\" ] && [ -f \"").append(loomTgzPath).append("\" ] && [ -s \"").append(loomTgzPath).append("\" ]; then ")
+          .append("mkdir -p \"$_ubr/tmp\" && ")
+          .append("cp \"").append(loomTgzPath).append("\" \"$_ubr/tmp/loom-linux-arm64.tgz\" && ")
+          .append("echo \"[*] Loom addon 已复制到 Ubuntu /tmp/\"; ")
+          .append("else echo \"[!] Loom addon 未就绪，将由脚本联网下载\"; fi; ")
+          .append("if [ -n \"").append(loomInnerPath).append("\" ] && [ -f \"").append(loomInnerPath).append("\" ]; then ")
+          .append("cp \"").append(loomInnerPath).append("\" \"$_ubr/root/.loom-setup.sh\" && ")
+          .append("{ grep -qF '.loom-setup' \"$_ubr/root/.bashrc\" 2>/dev/null || ")
+          .append("printf '\\n[ -f ~/.loom-setup.sh ] && . ~/.loom-setup.sh\\n' ")
+          .append(">> \"$_ubr/root/.bashrc\"; }; fi; ")
+          // root/.bashrc 末尾注入 provider dispatcher，使终端跟随 App 当前 provider 用户
+          .append("printf '").append(shellSingleQuoteForScript(
+                buildProviderLoginDispatcherFileContent(providerFilePath)))
+          .append("' > \"$_ubr/root/.assistant-login-dispatcher.sh\"; ")
+          .append("chmod +x \"$_ubr/root/.assistant-login-dispatcher.sh\" 2>/dev/null; ")
+          .append("sed -i '/exec su - claude/d;/.assistant-login-dispatcher/d' \"$_ubr/root/.bashrc\" 2>/dev/null || true; ")
+          .append("printf '\\n").append(buildProviderLoginDispatcherHook().replace("'", "'\\''"))
+          .append("\\n' >> \"$_ubr/root/.bashrc\"; ")
           // 建 capabilities.json 软链接（放 /root/ 供 setup 阶段用，/home/claude/ 供运行时用）
           .append("ln -sf \"").append(capabilitiesPath).append("\" ")
           .append("\"$_ubr/root/capabilities.json\" 2>/dev/null; ")
@@ -824,22 +874,25 @@ public class AutoUbuntuManager {
           .append("printf '#!/bin/sh\\ncurl -sf http://127.0.0.1:%s/clipboard\\n' \"$_bp\" ")
           .append("> \"$_ubr/usr/local/bin/termux-clipboard-get\" && ")
           .append("chmod +x \"$_ubr/usr/local/bin/termux-clipboard-get\" 2>/dev/null; ")
-          .append("echo \"[*] Claude + AgentServer setup + capabilities ready.\"; fi; fi; ");
+          .append("echo \"[*] Claude + Codex + AgentServer + Loom setup + capabilities ready.\"; fi; fi; ");
 
-        // ── Step 2.95: 在 Ubuntu 内创建 claude 用户（非交互），并建 capabilities 软链接 ──
+        // ── Step 2.95: 在 Ubuntu 内创建 provider 用户（非交互），并建 capabilities 软链接 ──
         final String capPath = capabilitiesPath;
         sb.append("if [ \"$auto_ok\" = \"1\" ]; then ")
           .append("proot-distro login ubuntu -- sh -c ")
-          .append("'id claude >/dev/null 2>&1 || useradd -m -s /bin/bash claude' 2>/dev/null || true; ")
+          .append("'id claude >/dev/null 2>&1 || useradd -m -s /bin/bash claude; ")
+          .append("id codex >/dev/null 2>&1 || useradd -m -s /bin/bash codex' 2>/dev/null || true; ")
           // capabilities.json 软链接到 claude 用户 home（运行时需要）
           .append("_ubr2=\"$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\"; ")
           .append("mkdir -p \"$_ubr2/home/claude\" 2>/dev/null; ")
           .append("ln -sf \"").append(capPath).append("\" \"$_ubr2/home/claude/capabilities.json\" 2>/dev/null; ")
+          .append("mkdir -p \"$_ubr2/home/codex\" 2>/dev/null; ")
+          .append("ln -sf \"").append(capPath).append("\" \"$_ubr2/home/codex/capabilities.json\" 2>/dev/null; ")
           .append("fi; ");
 
         // ── Step 3: 登录 Ubuntu ───────────────────────────────────────────────
         // 登录策略：依次尝试四种组合，直到成功（用 || 链：前一个非零退出才执行下一个）。
-        // root/.bashrc 末尾已注入 exec su - claude，终端会自动切换到 claude 用户。
+        // root/.bashrc 末尾已注入 provider dispatcher，终端会切到当前选中的 provider 用户。
         // signal 11 根因：Ubuntu 25.10 的 glibc/bash 在启动时调用了 proot 未完全拦截的 syscall。
         //   - --kernel 5.4.0：让 glibc 认为内核较旧，退回不依赖新 syscall 的代码路径
         //   - -- /bin/sh：用比 bash 更简单的 shell，减少对 syscall 的依赖
