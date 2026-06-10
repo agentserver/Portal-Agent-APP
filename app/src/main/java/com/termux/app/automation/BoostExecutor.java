@@ -52,6 +52,7 @@ public final class BoostExecutor {
             }
             activeStep = null;
             safeOnCompleted(safeCallback, recipe.name);
+            recordSuccess(recipe.id);
             return BoostResult.success(recipe.id);
         } catch (Exception e) {
             String reason = reasonFor(e);
@@ -70,9 +71,23 @@ public final class BoostExecutor {
         }
     }
 
+    private void recordSuccess(String recipeId) {
+        if (store == null) {
+            return;
+        }
+        try {
+            store.updateRecipeStats(recipeId, true, "");
+        } catch (Exception ignored) {
+        }
+    }
+
     private void recordFailure(String recipeId, String stepId, String reason) {
         if (store == null) {
             return;
+        }
+        try {
+            store.updateRecipeStats(recipeId, false, reason);
+        } catch (Exception ignored) {
         }
         store.appendFailure(recipeId, stepId, reason, safeCurrentFingerprint());
     }

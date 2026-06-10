@@ -189,6 +189,64 @@ public class BoostExecutorTest {
     }
 
     @Test
+    public void repeatedFailureDisablesAutoBoost() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        deleteDir(new File(context.getFilesDir(), "automation"));
+        AutomationStore store = new AutomationStore(context);
+        RecordingRunner runner = new RecordingRunner();
+        runner.failOnStepId = "step-1";
+        ActionRecipe recipe = recipe("recipe-fail", "Open Settings", step("step-1", "ui.click_text"));
+        store.saveRecipes(Collections.singletonList(recipe));
+        BoostExecutor executor = new BoostExecutor(runner, store);
+
+        executor.execute(recipe, BoostExecutor.Callback.NOOP);
+        executor.execute(recipe, BoostExecutor.Callback.NOOP);
+
+        ActionRecipe saved = store.loadRecipes().get(0);
+        Assert.assertFalse(saved.autoBoostEnabled);
+        Assert.assertEquals(2, saved.stats.failureCount);
+        Assert.assertEquals(0, saved.stats.successCount);
+        Assert.assertEquals("ui.click_text failed", saved.stats.lastFailureReason);
+    }
+
+    @Test
+    public void successfulExecutionIncrementsSuccessCount() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        deleteDir(new File(context.getFilesDir(), "automation"));
+        AutomationStore store = new AutomationStore(context);
+        ActionRecipe recipe = recipe("recipe-success", "Open Settings", step("step-1", "ui.click_text"));
+        store.saveRecipes(Collections.singletonList(recipe));
+        BoostExecutor executor = new BoostExecutor(new RecordingRunner(), store);
+
+        BoostResult result = executor.execute(recipe, BoostExecutor.Callback.NOOP);
+
+        ActionRecipe saved = store.loadRecipes().get(0);
+        Assert.assertTrue(result.success);
+        Assert.assertTrue(saved.autoBoostEnabled);
+        Assert.assertEquals(1, saved.stats.successCount);
+        Assert.assertEquals(0, saved.stats.failureCount);
+    }
+
+    @Test
+    public void ineligibleRecipeDoesNotUpdateStats() throws Exception {
+        Context context = RuntimeEnvironment.getApplication();
+        deleteDir(new File(context.getFilesDir(), "automation"));
+        AutomationStore store = new AutomationStore(context);
+        ActionRecipe recipe = recipe("recipe-disabled", "Disabled", true, false,
+            AutomationRiskLevel.LOW, step("step-1", "ui.click_text"));
+        store.saveRecipes(Collections.singletonList(recipe));
+        BoostExecutor executor = new BoostExecutor(new RecordingRunner(), store);
+
+        BoostResult result = executor.execute(recipe, BoostExecutor.Callback.NOOP);
+
+        ActionRecipe saved = store.loadRecipes().get(0);
+        Assert.assertFalse(result.success);
+        Assert.assertEquals(0, saved.stats.successCount);
+        Assert.assertEquals(0, saved.stats.failureCount);
+        Assert.assertTrue(store.loadFailures().isEmpty());
+    }
+
+    @Test
     public void nullRecipeReturnsFailure() {
         BoostExecutor executor = new BoostExecutor(new RecordingRunner(), null);
 

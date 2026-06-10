@@ -69,6 +69,26 @@ public final class AutomationStore {
         }
     }
 
+    public void updateRecipeStats(final String recipeId, final boolean success, final String failureReason) {
+        if (recipeId == null || recipeId.isEmpty()) {
+            return;
+        }
+        synchronized (FILE_LOCK) {
+            File file = new File(automationDir(), RECIPES_FILE);
+            List<ActionRecipe> recipes = loadRecipeArrayLocked(file);
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < recipes.size(); i++) {
+                ActionRecipe recipe = recipes.get(i);
+                if (recipe == null || !recipeId.equals(recipe.id)) {
+                    continue;
+                }
+                recipes.set(i, recipeWithUpdatedStats(recipe, success, failureReason, now));
+                saveRecipeArrayLocked(file, recipes);
+                return;
+            }
+        }
+    }
+
     public void appendFailure(String recipeId, String stepId, String reason, ScreenFingerprint fingerprint) {
         synchronized (FILE_LOCK) {
             try {
@@ -111,6 +131,37 @@ public final class AutomationStore {
 
     public File automationDir() {
         return new File(context.getFilesDir(), DIR_NAME);
+    }
+
+    private ActionRecipe recipeWithUpdatedStats(ActionRecipe recipe, boolean success, String failureReason, long now) {
+        RecipeStats oldStats = recipe.stats == null ? RecipeStats.empty() : recipe.stats;
+        RecipeStats newStats;
+        boolean autoBoostEnabled = recipe.autoBoostEnabled;
+        if (success) {
+            newStats = new RecipeStats(
+                oldStats.successCount + 1,
+                oldStats.failureCount,
+                now,
+                oldStats.lastFailureAt,
+                oldStats.averageDurationMs,
+                oldStats.lastFailureReason);
+        } else {
+            int failureCount = oldStats.failureCount + 1;
+            newStats = new RecipeStats(
+                oldStats.successCount,
+                failureCount,
+                oldStats.lastSuccessAt,
+                now,
+                oldStats.averageDurationMs,
+                failureReason);
+            if (failureCount >= 2) {
+                autoBoostEnabled = false;
+            }
+        }
+        return new ActionRecipe(recipe.id, recipe.name, recipe.enabled, autoBoostEnabled,
+            recipe.riskLevel, recipe.intentPatterns, recipe.targetPackage, recipe.targetActivity,
+            recipe.startConditions, recipe.endConditions, recipe.steps, recipe.source,
+            recipe.sourceTaskIds, newStats, recipe.currentVersionId, recipe.versionsCopy());
     }
 
     private List<ActionRecipe> editRecipeArrayLocked(File file, RecipeListEditor editor) {
