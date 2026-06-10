@@ -13,6 +13,10 @@ import android.view.accessibility.AccessibilityNodeInfo;
 
 import androidx.annotation.RequiresApi;
 
+import com.termux.app.automation.ScreenFingerprint;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -70,6 +74,37 @@ public class McpAccessibilityService extends AccessibilityService {
 
     public String getCurrentPackage()  { return mCurrentPackage; }
     public String getCurrentActivity() { return mCurrentActivity; }
+
+    public ScreenFingerprint currentScreenFingerprint() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            return new ScreenFingerprint(mCurrentPackage, mCurrentActivity,
+                new ArrayList<>(), 0, 0, "");
+        }
+
+        FingerprintCollector collector = new FingerprintCollector();
+        try {
+            collector.rootSummary = shortClass(root.getClassName());
+            collectFingerprint(root, 0, collector);
+        } finally {
+            root.recycle();
+        }
+        return new ScreenFingerprint(mCurrentPackage, mCurrentActivity, collector.anchors,
+            collector.clickableCount, collector.editableCount, collector.rootSummary);
+    }
+
+    public boolean screenMatches(ScreenFingerprint expected) {
+        if (expected == null) return true;
+        ScreenFingerprint current = currentScreenFingerprint();
+        if (expected.packageName != null && expected.packageName.length() > 0
+            && !expected.packageName.equals(current.packageName)) {
+            return false;
+        }
+        for (String anchor : expected.anchors) {
+            if (!current.containsAnchor(anchor)) return false;
+        }
+        return true;
+    }
 
     // ── Gesture dispatch (ui.tap, ui.swipe) ───────────────────────────────────
 
@@ -182,6 +217,46 @@ public class McpAccessibilityService extends AccessibilityService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void collectFingerprint(AccessibilityNodeInfo node, int depth,
+                                    FingerprintCollector collector) {
+        if (node == null || collector == null || depth > 4) return;
+
+        CharSequence text = node.getText();
+        CharSequence desc = node.getContentDescription();
+        if (text != null && text.length() > 0 && collector.anchors.size() < 24) {
+            collector.anchors.add(text.toString());
+        }
+        if (desc != null && desc.length() > 0 && collector.anchors.size() < 24) {
+            collector.anchors.add(desc.toString());
+        }
+        if (node.isClickable()) collector.clickableCount++;
+        if (node.isEditable()) collector.editableCount++;
+
+        if (depth >= 4) return;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            try {
+                collectFingerprint(child, depth + 1, collector);
+            } finally {
+                if (child != null) child.recycle();
+            }
+        }
+    }
+
+    private static String shortClass(CharSequence cls) {
+        if (cls == null) return "";
+        String s = cls.toString();
+        int dot = s.lastIndexOf('.');
+        return dot >= 0 ? s.substring(dot + 1) : s;
+    }
+
+    private static final class FingerprintCollector {
+        final List<String> anchors = new ArrayList<>();
+        int clickableCount;
+        int editableCount;
+        String rootSummary = "";
+    }
 
     /**
      * Traverse the node tree to find a node matching the text, then return its
