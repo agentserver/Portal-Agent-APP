@@ -212,6 +212,11 @@ public class HomeFragment extends Fragment {
         mAttachmentPreviewRow = view.findViewById(R.id.attachment_preview_row);
         mAttachmentNameText   = view.findViewById(R.id.attachment_name_text);
         mSessionTitle.setOnClickListener(v -> showProviderDialog());
+        View homeSettingsButton = view.findViewById(R.id.btn_home_settings);
+        if (homeSettingsButton != null) {
+            homeSettingsButton.setOnClickListener(v -> startActivity(new Intent(
+                requireContext(), com.termux.app.activities.SettingsActivity.class)));
+        }
         updateSessionTitle(null);
 
         // ── 抽屉 Tab 栏 ───────────────────────────────────────────────────
@@ -451,11 +456,15 @@ public class HomeFragment extends Fragment {
         if (!android.provider.Settings.canDrawOverlays(requireContext())) {
             mStatusText.setText("● 点此授权悬浮窗");
             mStatusText.setTextColor(0xFFFF6F00);
+            mStatusText.setClickable(true);
+            mStatusText.setFocusable(true);
             mStatusText.setOnClickListener(v -> {
                 Intent oi = new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     android.net.Uri.parse("package:" + requireContext().getPackageName()));
                 startActivity(oi);
                 mStatusText.setOnClickListener(null);
+                mStatusText.setClickable(false);
+                mStatusText.setFocusable(false);
             });
         }
     }
@@ -467,6 +476,8 @@ public class HomeFragment extends Fragment {
         // 回到界面后若已授权，清除授权提示
         if (android.provider.Settings.canDrawOverlays(requireContext()) && mStatusText != null) {
             mStatusText.setOnClickListener(null);
+            mStatusText.setClickable(false);
+            mStatusText.setFocusable(false);
         }
     }
 
