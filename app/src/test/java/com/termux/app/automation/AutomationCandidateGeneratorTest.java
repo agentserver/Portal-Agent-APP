@@ -72,6 +72,19 @@ public class AutomationCandidateGeneratorTest {
     }
 
     @Test
+    public void appOpenTargetPackageOverridesForegroundImePackage() throws Exception {
+        ActionRecipe recipe = AutomationCandidateGenerator.fromSuccessfulTurn(
+            "打开设置",
+            "task-1",
+            Arrays.asList(trace("1", "app.open", new JSONObject().put("package_name", "com.android.settings"),
+                true, "opened settings", "com.baidu.input", "android.inputmethodservice.SoftInputWindow")));
+
+        Assert.assertNotNull(recipe);
+        Assert.assertEquals("com.android.settings", recipe.targetPackage);
+        Assert.assertEquals("com.android.settings", recipe.endConditions.packageName);
+    }
+
+    @Test
     public void coordinateOnlyTapReturnsNull() throws Exception {
         ActionRecipe recipe = AutomationCandidateGenerator.fromSuccessfulTurn(
             "点一下",

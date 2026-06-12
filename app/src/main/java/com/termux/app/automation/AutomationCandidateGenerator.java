@@ -75,11 +75,11 @@ public final class AutomationCandidateGenerator {
         }
         if (endAnchor.isEmpty()) return null;
 
-        String targetPackage = lastRetained == null ? "" : lastRetained.packageName;
-        if (targetPackage.trim().isEmpty()) {
-            targetPackage = lastAppOpenPackage;
+        String targetPackage = targetPackageFor(lastRetained, lastAppOpenPackage);
+        String targetActivity = "";
+        if (lastRetained != null && targetPackage.equals(lastRetained.packageName)) {
+            targetActivity = lastRetained.activityName;
         }
-        String targetActivity = lastRetained == null ? "" : lastRetained.activityName;
         ScreenFingerprint endConditions = new ScreenFingerprint(
             targetPackage, targetActivity, Collections.singletonList(endAnchor), 0, 0, "");
 
@@ -153,6 +153,18 @@ public final class AutomationCandidateGenerator {
         if (!legacyPackage.isEmpty()) {
             AutomationJson.put(arguments, "package_name", legacyPackage);
         }
+    }
+
+    private static String targetPackageFor(ToolTraceEvent lastRetained, String lastAppOpenPackage) {
+        if (lastRetained == null) return defaultString(lastAppOpenPackage).trim();
+        if (TOOL_APP_OPEN.equals(lastRetained.toolName)) {
+            return firstNonEmpty(
+                lastRetained.arguments.optString("package_name", ""),
+                firstNonEmpty(lastRetained.arguments.optString("package", ""), lastAppOpenPackage));
+        }
+        String targetPackage = defaultString(lastRetained.packageName).trim();
+        if (!targetPackage.isEmpty()) return targetPackage;
+        return defaultString(lastAppOpenPackage).trim();
     }
 
     private static boolean isAllowedTool(String toolName) {

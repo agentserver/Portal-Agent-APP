@@ -64,8 +64,8 @@ public class AppTool implements McpTool {
         PackageManager pm = context.getPackageManager();
         Intent launch = pm.getLaunchIntentForPackage(pkg);
         if (launch == null) {
-            return text("App not found or not launchable: " + pkg +
-                "\nTip: use android.get_status() or check installed apps.");
+            throw new Exception("App not found or not launchable: " + pkg +
+                ". Tip: use android.get_status() or check installed apps.");
         }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         context.startActivity(launch);
