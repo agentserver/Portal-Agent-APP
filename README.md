@@ -1,226 +1,284 @@
-# Claude Code Android App
+# Claude Code Test App
 
-把 **Claude Code** 跑在你的 Android 手机上。基于 Termux 二次开发，用 **proot-distro** 在容器里跑 Ubuntu + Claude Code，再通过 MCP 把手机能力（截屏、点击、输入、相机、传感器）暴露给 Claude，让 Claude 真正能「操作手机」。
+一个运行在 Android 手机上的本机 Agent 运行时。项目基于 Termux 二次开发，在 App 私有目录中部署 Ubuntu proot 环境，同时支持 Codex 和 Claude，并把手机能力通过 Android MCP 暴露给模型使用。
 
-> 仓库默认面向 **arm64** 设备，自带离线 Ubuntu 快照。
-> 实现细节记录在 → [app架构.md](./app架构.md)
+当前项目已经不只是“在手机上运行 Claude Code”。它包含：
 
----
+- Codex / Claude 双后端聊天与独立配置。
+- 截图、无障碍、ADB、应用、文件、系统状态等 Android MCP 工具。
+- AgentServer / Loom 协作运行时，支持 Driver 绑定、Slave 管理和多设备协作。
+- 工作目录限制、自动化 Boost、密钥管理、终端和调试页面。
+- 离线优先的 Ubuntu、AgentServer、Loom 分包安装。
 
-## 核心特性
+> 当前主路径以 Codex 为主，Claude 保留兼容。
 
-| 能力             | 说明                                                    |
-|----------------|-------------------------------------------------------|
-| 完整 Claude Code | 支持 skills、plan mode、自定义 slash commands、记忆系统、MCP 工具    |
-| Claude 操作手机    | 截屏、点击、滑动、输入文字、读取 UI 树、查询权限/电池/WiFi/传感器                |
-| 兼容第三方 API      | 通过 `ANTHROPIC_BASE_URL` 接入 DeepSeek、各种 Anthropic 兼容代理 |
-| ChatGPT 风格 UI  | 流式气泡、思考过程折叠、附件上传、对话历史                                 |
-| AgentServer 接入 | 把手机做成"远程沙盒"，从 PC/Web 端的上游 Agent 派发任务                  |
-| 后台悬浮窗          | App 切到后台且 Claude 在执行任务时显示状态条，不挡视线                     |
-| 可离线安装（但依旧建议联网） | 内置已配置好的Ubuntu快照，可直接离线部署                               |
+## 当前定位
 
----
+App 的核心目标是让 Android 设备成为一个可交互、可协作、可被远端调度的 Agent 节点：
 
-## 安装
+| 模块 | 作用 |
+| --- | --- |
+| 主页 | 本机 Codex / Claude 对话，支持流式输出、思考折叠、工具调用排序和对话历史 |
+| 密钥 | 分别管理 Codex 和 Claude 的 API Key、环境变量和配置文件 |
+| 协作 | 管理 Driver 工作区绑定、本机运行时、Slave 列表、Loom 编排和 AgentServer 连接 |
+| 终端 | 进入 Termux / Ubuntu 环境排查运行状态 |
+| 设置 | 自动化 Boost、工作目录限制、权限和调试入口 |
 
-### 系统要求
+## 运行架构
 
-- Android 7.0+ 的 **arm64** 设备
-- 推荐预留 3GB+ 可用存储（Ubuntu rootfs ~ 1GB，Claude Code 安装 ~ 500MB）
+### Android 层
 
-### 安装说明
+Android App 负责 UI、权限、MCP 工具和安装编排：
 
-首次打开 App，**保持前台 + 联网**，等 Termux 终端跑完自动安装脚本（约30秒到1分钟）
+- `HomeFragment`：聊天主页，支持 Codex / Claude 切换。
+- `ApiKeyFragment`：按 provider 隔离管理密钥和配置。
+- `CollaborationFragment`：统一协作运行时控制台。
+- `AgentServerFragment`：AgentServer 工作空间连接的高级页面。
+- `LoomFragment`：Loom Driver / Slave / Observer 的高级配置页面。
+- `WorkspaceAccessSettingsFragment`：工作目录限制和应用目录权限。
+- `McpHttpServer`：向 Ubuntu 内的 Agent 暴露 Android 工具。
 
-安装完成的标志是终端最后输出 `[*] Setup complete`，以及进入以cLaude为用户名的Ubuntu环境。
+### Ubuntu 层
 
----
+App 内置一个共享 Ubuntu proot 环境，但 provider 状态拆到不同 Linux 用户下：
+
+| Provider | Linux 用户 | Home | 主配置 | Key 环境变量 |
+| --- | --- | --- | --- | --- |
+| Codex | `codex` | `/home/codex` | `/home/codex/AGENTS.md`, `/home/codex/.codex/config.toml` | `OPENAI_API_KEY` |
+| Claude | `claude` | `/home/claude` | `/home/claude/CLAUDE.md`, `/home/claude/.claude/settings.json` | `ANTHROPIC_API_KEY` |
+
+Ubuntu 基础环境、Node.js、AgentServer 和 Loom 二进制共用同一个 rootfs，避免重复打包导致 APK 体积失控。
+
+### 分包资产
+
+当前 APK 内置这些离线资产：
+
+| 资产 | 路径 | 作用 |
+| --- | --- | --- |
+| Ubuntu 快照 | `app/src/main/assets/ubuntu-snapshot/ubuntu-claude-aarch64-20260512.tar.xz` | Android 内 Ubuntu rootfs |
+| AgentServer addon | `app/src/main/assets/agentserver-linux-arm64.tgz` | AgentServer CLI / 连接能力 |
+| Loom addon | `app/src/main/assets/loom-linux-arm64.tgz` | `driver-agent`, `slave-agent`, `observer-server`, skills 和 prompt |
+
+安装优先使用 APK 内置包；内置包缺失或损坏时，安装脚本可以按模块走联网回退下载。
+
+## 安装要求
+
+- Android 7.0+。
+- arm64 设备。
+- 建议预留 4GB 以上可用空间。
+- 首次部署建议联网，便于包缺失或设备环境异常时走回退安装。
+- 需要手动授权截图和无障碍权限，ADB 能力需要设备侧允许调试。
+
+首次启动时请保持 App 在前台，等待终端安装脚本完成。安装完成后，Ubuntu、Codex/Claude 用户、Android MCP 配置、AgentServer addon 和 Loom addon 会被写入 App 私有目录。
 
 ## 首次配置
 
-### 1. 配置 API Key
+### 1. 选择当前助手
 
-打开底部导航 **API Key** 页：
+主页顶部的“切换 Agent”按钮用于在 Codex 和 Claude 之间切换。切换只影响新的本机对话和后续协作配置生成，不会删除另一个 provider 的历史数据。
 
-- 点击 **添加新 Key**
-- 别名：随便取
-- API Key：你的 `sk-ant-xxx`（Anthropic）或其他可以api key
-- Base URL：
-  - 留空 = 走CLaude官方 Anthropic API
-  - DeepSeek 填 `https://api.deepseek.com/anthropic`
-  - 其他第三方填它们提供的 Anthropic 兼容地址
-- 点击保存后**设为当前使用**
+### 2. 配置密钥
 
-### 2. 授予运行时权限
+进入底部“密钥”页：
 
-打开主页（**Home** 页），看底部两个状态按键：
+- 顶部切换 Codex / Claude。
+- 先配置 Agent 相关设置，再添加 API Key。
+- Codex 写入 `OPENAI_API_KEY` 和 Codex 配置。
+- Claude 写入 `ANTHROPIC_API_KEY`，可选写入 `ANTHROPIC_BASE_URL`。
 
-| 徽章 | 含义 | 怎么开 |
-|------|------|--------|
-|  截屏 | MediaProjection 权限 | 点徽章右边的「授权截图」按钮，每次 App 启动后需点一次 |
-|  无障碍 | UI 控制权限 | 点徽章后跳系统设置 → 找到本 App 启用 |
+两个 provider 的密钥、历史、技能和配置相互隔离。
 
-不开权限不影响聊天，只影响 Claude 的"操作手机"能力。
-其他权限需去系统设置 应用管理界面开启。
+### 3. 授权手机能力
 
-### 3. 连接 AgentServer
+主页和设置页会显示关键权限状态：
 
-把手机当作"远程沙盒"，让上游 AgentServer 把任务派发到这里执行：
+| 权限 | 用途 |
+| --- | --- |
+| 截图 | 让 Agent 观察屏幕内容 |
+| 无障碍 | 读取 UI 树、点击、滑动、输入 |
+| ADB | 在无障碍不稳定或不可用时提供候选操作通道 |
 
-底部导航 **AgentServer** 页：
-- Server URL：上游服务器地址
-- 沙盒 ID：留空 = 自动新建一个；填值 = 复用某个已有沙盒
-- 设备名称：随便取，会显示在上游 Web UI 的沙盒列表
-- 点击「连接」
-- AgentServer派发的任务以dangerously-skip-permissions 运行，不需人工确认。
+部分 App 的无障碍节点可能不完整，项目会优先使用可验证的 UI 树操作，必要时补充 ADB 和截图识别方案。
 
-连接成功后日志区会出现 `tunnel connected (sandbox: ...)`。
+## 主页
 
----
+主页用于本机对话：
 
-## 使用说明
+- 顶部可切换 Codex / Claude。
+- 左侧抽屉按 provider 独立显示历史、技能、记忆和上传文件。
+- 输出流会把思考过程、工具调用和最终回答分层展示。
+- Markdown 中的加粗等基础格式会在气泡内渲染。
+- 输出时页面不会强制跳到底部，便于用户从回答开头自然阅读。
 
-### 主页
+Codex 当前是主路径；Claude 兼容原有 Claude Code 使用方式。
 
-主页是聊天区，底部输入框旁的几个按钮：
+## 协作运行时
 
-| 按钮 | 作用 |
-|------|------|
-| 📎 | 选文件作为附件，会自动复制进 Ubuntu 给 Claude 读取 |
-| **发送** | 发出消息，开始流式输出 |
-| **打断** | 停止当前生成（保留会话上下文） |
-| **新建对话** | 完全开始新对话（清屏 + 新 session ID） |
+协作页把 AgentServer 和 Loom 统一成一个运行时 Dashboard，而不是两个割裂入口。
 
-### 侧拉抽屉（左侧滑出）
+### Driver 工作区绑定
 
-5 个 Tab：
+Driver 是当前推荐的协作入口。点击“Driver 工作区绑定”后扫码登录，把本机 Driver 绑定到当前 AgentServer workspace。绑定成功后，Codex 或 Claude 可以通过 Loom driver MCP 查询和调度同 workspace 下的 Slave。
 
-| Tab | 内容                                                      |
-|------|---------------------------------------------------------|
-| **历史** | 所有过往对话，点击恢复（自动加载完整对话）(删除会同步删掉当前对话上传的相关文件)               |
-| **记忆** | Claude 的记忆库（`.md` 文件），点开可看可编辑                           |
-| **技能** | 自定义 slash commands（`.md` 文件），点 ＋ 新建                     |
-| **任务** | AgentServer 派发的任务列表，点击进入详情页看完整对话（删除会同步删掉当前任务执行时创建的临时文件） |
-| **上传** | 你上传给 Claude 看的所有附件，长按可删（同步删 Ubuntu 内文件）                 |
+如果旧 token 失效，App 会重新要求绑定，避免出现远端显示 Slave 在线但本机 Driver 查询不到的情况。
 
-**长按**列表项几乎都能弹出删除确认。删除会同步清理对应的 Ubuntu 文件 / Claude session jsonl，避免磁盘 leak。
+### 本机运行时
 
-### AgentServer 任务详情页
+本机运行时展示当前设备可承担的协作角色：
 
-点侧栏「任务」Tab 里的某条 → 全屏聊天页：
-- 顶部：返回按钮 + 任务标题 + 运行/完成徽章
-- 内容：完整对话流（用户 prompt + Claude 回复 + 工具调用 + 工具返回）
-- 任务还在跑时每秒自动刷新，跑完停止刷新
+- Observer：Loom 遥测与能力仓库。
+- Driver：在当前 Agent 中提供编排 MCP。
+- Slave：被 Driver 调度执行任务的工作节点。
 
-### 后台悬浮窗
+协作首页支持创建、启动、暂停和删除本机 Slave。每个 Slave 可以指定工作目录、provider 和名称。
 
-- App 切到后台 + Claude 正在执行任务时，屏幕右上角出现一个紧凑状态条
-- 显示当前状态（运行中/执行任务）+ prompt 预览
-- 右侧 `×` 可手动关闭，下次新任务开始时会再次出现
-- Claude 空闲时不显示
+### Loom 编排能力
 
-### 文件附件
+Loom 运行在 AgentServer workspace 之上，负责多 Agent 编排：
 
-主页输入框左边的 📎 → 系统文件选择器 → 选文件 → 输入框上方出现 `📎 文件名` 提示。
+- 查询在线 agent / slave。
+- 检查能力。
+- 派发任务。
+- 调用 slave 的 bash、文件和动态 MCP 能力。
 
-发送时 prompt 自动拼成 `[附件: /home/claude/uploads/<name>]\n<你的文字>`，Claude 用原生 Read 工具读取。
+高级配置入口保留在协作页中，用于查看日志、处理注册、调试 Observer / Driver / Slave。
 
----
+### AgentServer 连接
 
-## 接入第三方 API（DeepSeek 等）
+AgentServer 是远端 workspace/control plane。当前 UI 中，AgentServer 连接保留为独立高级入口：
 
-只要服务端**兼容 Anthropic API 协议**就行。
+- 使用 Loom 编排时，优先通过 Driver 工作区绑定进入协作能力。
+- 不使用 Loom 编排时，可以从 AgentServer 页面连接传统 AgentServer 工作空间。
 
-### DeepSeek
+## 工作目录限制
 
-DeepSeek 官方提供 Anthropic 兼容端点：
+工作目录限制用于控制 Agent 可以访问哪些目录和应用数据：
 
-- Base URL: `https://api.deepseek.com/anthropic`
-- API Key: 你的 DeepSeek `sk-xxx`
-- 模型映射由 DeepSeek 自动处理
+- Ubuntu 中当前 provider 用户目录默认可用。
+- Android 基础公共目录可作为默认可选目录。
+- 应用目录按应用列表勾选授权。
+- 协作页只保留跳转入口，完整配置在设置页中完成。
 
-### 其他兼容服务
+这个功能用于减少 Agent 对无关文件和应用数据的访问面。
 
-- OpenRouter 的 anthropic models
-- OneAPI / NewAPI / One-Hub 等聚合代理
-- 自建 claude-code-router
+## 自动化 Boost
 
-填它们提供的 base URL + key 即可。**纯 OpenAI 格式**（如 `api.openai.com`）目前没有翻译代理。
+自动化 Boost 用于沉淀可复用的低风险手机操作路径：
 
----
+- 第一次由 Agent 正常观察和操作。
+- 成功后从 MCP 调用轨迹生成候选动作配方。
+- 用户审核后加入白名单。
+- 后续相似任务可直接执行配方，失败时清除 boosting 状态并回退给 Agent。
 
-## 常见问题
+第一阶段只适合打开 App、进入固定页面、点击稳定按钮等低风险操作；发送、删除、支付、授权、密码和验证码等高风险动作不会自动 Boost。
 
-### Claude 说"截屏权限未授予"
+## Android MCP 能力
 
-去主页点顶部「授权截图」按钮。每次 App 重启都要重新点一次。
+项目内置的 Android 工具会暴露给 Codex / Claude：
 
-### Claude 说"无障碍服务未启用"
+- 截图观察。
+- 无障碍 UI 树读取。
+- 点击、滑动、输入、按键。
+- 打开应用和读取当前 Activity。
+- 文件读取和目录管理。
+- 设备状态、网络、电量、传感器等查询。
+- ADB 候选操作能力。
 
-系统设置 → 无障碍 → 找到本 App → 启用。这是 Claude 调用 `ui.tap` 等所必需。
-。
-
-### 提示 402报错 / Insufficient Balance
-
-是 API 账户余额耗尽了。去对应平台充值。
-
-### App 越用越占空间
-
-每次对话和每个 AgentServer 任务都会保存历史（含截图 base64）。清理方式：
-- 侧栏「历史」Tab 长按 → 删除 → 自动清 Claude session jsonl
-- 侧栏「任务」Tab 长按 → 删除 → 自动清归档文件
-- 侧栏「上传」Tab 长按 → 删除 → 自动清 Ubuntu 内文件
-
-App 启动时还会自动扫描并清理"孤儿 jsonl"（删过会话但磁盘上还残留的文件）。
-
----
-
-## 文件位置（排查用）
-
-| 路径 | 内容 |
-|------|------|
-| `/data/data/com.termux/files/home/agentserver-agent.log` | AgentServer 运行日志 |
-| `/data/data/com.termux/files/home/mcp-audit.log` | Claude 调用 MCP 工具的审计日志 |
-| `/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/home/claude/CLAUDE.md` | Claude 系统提示（每次启动重写） |
-| `~/.claude/memory/*.md`（Ubuntu 内） | 记忆库 |
-| `~/.claude/projects/-home-claude/<id>.jsonl`（Ubuntu 内） | Claude 自身的 session 历史 |
-| `~/.agentserver-pipe.jsonl`（Ubuntu 内） | agentserver wrapper 的运行时缓冲 |
-| App 私有 `getFilesDir()/agent-tasks/<id>.jsonl` | 每个 AgentServer 任务的归档 |
-
----
+这些能力通过本机 MCP 服务提供，模型不需要直接调用 Android SDK。
 
 ## 构建
 
-需要 **JDK 17** + **Android SDK 36**。
+需要 JDK 17 和 Android SDK 36。
 
-```bash
-# Debug 构建
-./gradlew :app:assembleDebug
-
-# 输出位置
-app/build/outputs/apk/debug/claude-code-test-app_apt-android-7-debug_universal.apk
-
-# 直接装到连接的设备
-adb install -r app/build/outputs/apk/debug/claude-code-test-app_apt-android-7-debug_universal.apk
+```powershell
+cd C:\ZRS_Works\Claude_code_test_app
+.\gradlew.bat :app:assembleDebug
 ```
 
-**构建说明：**
-- `app/src/main/assets/ubuntu-snapshot/` 下的 tar.xz 是 Ubuntu 快照，决定了 APK 大小（默认 ~230MB）
-- `gradle.properties` 已设置 `-Xmx12288M`，旧版 8GB heap 会在打包时 OOM
-- 已配置 `noCompress 'xz', 'tar', ...` 跳过对预压缩文件的二次压缩，省内存且加快安装
+Debug APK 输出位置：
 
----
+```text
+app\build\outputs\apk\debug\claude-code-test-app_apt-android-7-debug_universal.apk
+```
 
-## 实现细节
+安装到已连接设备：
 
-完整的架构图、数据流、组件职责拆解请看：
+```powershell
+adb install -r app\build\outputs\apk\debug\claude-code-test-app_apt-android-7-debug_universal.apk
+```
 
-**→ [app架构.md](./app架构.md)**
+当前 APK 包含 Ubuntu 快照和 addon，体积约 400MB 以上。发布时应把 APK 上传为 GitHub Release 资产，不应直接提交到 git 历史。
 
-涵盖 Fragment 路由、MCP 工具实现、AgentServer 接入的 wrapper 拦截机制、悬浮窗显隐三条件、4 个 Store 的数据组织、自动安装链路等。
+## 常用验证命令
 
----
+```powershell
+.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat :app:assembleDebug
+adb devices
+adb install -r app\build\outputs\apk\debug\claude-code-test-app_apt-android-7-debug_universal.apk
+```
+
+查看设备上安装版本：
+
+```powershell
+adb shell dumpsys package com.termux | findstr /i "versionName versionCode firstInstallTime lastUpdateTime"
+```
+
+## 排查路径
+
+| 路径 | 内容 |
+| --- | --- |
+| `/data/data/com.termux/files/home/agentserver-agent.log` | AgentServer 运行日志 |
+| `/data/data/com.termux/files/home/loom-driver-register.log` | Driver 注册日志 |
+| `/data/data/com.termux/files/home/loom-slave.log` | Slave 运行日志 |
+| `/data/data/com.termux/files/home/mcp-audit.log` | Android MCP 调用审计 |
+| `/home/codex/AGENTS.md` | Codex 侧 Android 能力提示 |
+| `/home/codex/.codex/config.toml` | Codex 配置 |
+| `/home/claude/CLAUDE.md` | Claude 侧 Android 能力提示 |
+| `/home/claude/.claude/settings.json` | Claude 配置 |
+
+## 常见问题
+
+### 进入 App 后对话区为空或历史突然恢复
+
+通常是 provider 历史恢复、会话缓存和 UI 状态同步问题。先确认当前顶部显示的是 Codex 还是 Claude，再打开左侧抽屉查看对应 provider 的历史。
+
+### Driver 已绑定，但查询不到 Slave
+
+优先检查 Driver token 是否过期。App 会在复用 Driver 配置前调用 `/api/agent/whoami` 校验凭据；如果校验失败，需要重新扫码绑定 Driver。
+
+### AgentServer 页面已连接，但 Driver 仍要求扫码
+
+这是正常边界。AgentServer 工作空间连接和 Loom Driver 绑定不是同一个凭据。当前推荐路径是以 Driver 绑定作为主要协作入口。
+
+### 截图或无障碍显示未授权
+
+截图权限每次 App 重启后可能需要重新授权。无障碍权限需要进入系统设置打开本 App 的无障碍服务。部分系统会在应用更新后重置权限状态。
+
+### Android Studio 编译出来像旧版本
+
+先确认 Android Studio 打开的目录是：
+
+```text
+C:\ZRS_Works\Claude_code_test_app
+```
+
+然后执行 Gradle Sync 或 Clean/Rebuild。当前新版代码和 Loom/Codex 相关页面都在这个目录下。
+
+## 设计文档
+
+主要设计记录在 `docs/superpowers/specs/` 下：
+
+- `2026-06-04-codex-provider-support-design.md`
+- `2026-06-03-loom-offline-addon-integration-design.md`
+- `2026-06-10-automation-boost-design.md`
+- `2026-06-16-agentserver-loom-connection-boundary-design.md`
+- `2026-06-16-agentserver-loom-unified-collaboration-design.md`
+
+旧的总体架构说明仍可参考：
+
+- `app架构.md`
 
 ## License
 
-继承自 Termux 上游协议。
+本项目基于 Termux 上游代码继续开发，继承对应开源协议。新增的 AgentServer / Loom 集成遵循各自上游项目协议。
