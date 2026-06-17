@@ -11,14 +11,24 @@ import java.util.List;
 
 public class AgentTaskStore {
 
-    private static final String PREFS = "agent_tasks_v2";
+    private static final String PREFS_CLAUDE = "agent_tasks_v2";
+    private static final String PREFS_CODEX  = "agent_tasks_v2_codex";
     private static final String KEY   = "tasks";
     private static final int    MAX   = 50;
 
     private final SharedPreferences mPrefs;
 
     public AgentTaskStore(Context ctx) {
-        mPrefs = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this(ctx, AssistantProvider.CLAUDE);
+    }
+
+    public AgentTaskStore(Context ctx, AssistantProvider provider) {
+        mPrefs = ctx.getApplicationContext()
+            .getSharedPreferences(prefsNameForProvider(provider), Context.MODE_PRIVATE);
+    }
+
+    public static String prefsNameForProvider(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? PREFS_CODEX : PREFS_CLAUDE;
     }
 
     /** 按 id 存在则更新；否则头插。 */

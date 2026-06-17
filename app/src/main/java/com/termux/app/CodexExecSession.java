@@ -142,6 +142,17 @@ public final class CodexExecSession {
         return copy;
     }
 
+    public void loadTranscript(List<ChatMessage> messages) {
+        interrupt();
+        synchronized (mTranscript) {
+            mTranscript.clear();
+            if (messages == null) return;
+            for (ChatMessage message : messages) {
+                if (message != null) mTranscript.add(copyMessage(message));
+            }
+        }
+    }
+
     public void resetForNewConversation() {
         interrupt();
         synchronized (mTranscript) {
@@ -298,6 +309,31 @@ public final class CodexExecSession {
 
     public void recordForTest(ChatMessage message) {
         if (message != null) mTranscript.add(message);
+    }
+
+    void recordThinkingForTest(int generation, String thinking) {
+        synchronized (mStateLock) {
+            if (isCurrentRunLocked(generation)) recordThinkingLocked(thinking);
+        }
+    }
+
+    void recordToolUseForTest(int generation, String name, String inputJson) {
+        synchronized (mStateLock) {
+            if (isCurrentRunLocked(generation)) recordToolUseLocked(name, inputJson);
+        }
+    }
+
+    void recordToolResultForTest(int generation, String name, String summary, String full) {
+        synchronized (mStateLock) {
+            if (isCurrentRunLocked(generation)) recordToolResultLocked(name, summary, full);
+        }
+    }
+
+    void finishRunForTest(int generation) {
+        synchronized (mStateLock) {
+            if (isCurrentRunLocked(generation)) collapseTranscriptThinkingLocked();
+        }
+        finishRunIfCurrent(generation);
     }
 
     public String buildPromptForTest(String userText) {
@@ -647,13 +683,13 @@ public final class CodexExecSession {
             if (!isCurrentRunLocked(generation)) return false;
             String clean = text.trim();
             boolean shouldEmit = delivery == null || delivery.shouldEmit(clean, forceEmit);
-            ChatMessage last = null;
             synchronized (mTranscript) {
-                if (!mTranscript.isEmpty()) last = mTranscript.get(mTranscript.size() - 1);
-                if (last != null && last.type == ChatMessage.Type.ASSISTANT) {
-                    last.content = clean;
+                int outputIndex = ChatTurnOrdering.findOutputIndex(mTranscript);
+                if (outputIndex >= 0) {
+                    mTranscript.get(outputIndex).content = clean;
                 } else {
-                    mTranscript.add(ChatMessage.assistant(clean));
+                    mTranscript.add(ChatTurnOrdering.findOutputInsertIndex(mTranscript),
+                        ChatMessage.assistant(clean));
                 }
             }
             if (shouldEmit) {
@@ -729,6 +765,7 @@ public final class CodexExecSession {
     }
 
     private void emitThinkingLocked(String thinking) {
+        recordThinkingLocked(thinking);
         for (Listener listener : mListeners) {
             try {
                 listener.onThinking(thinking);
@@ -738,6 +775,7 @@ public final class CodexExecSession {
     }
 
     private void emitToolUseLocked(String name, String inputJson) {
+        recordToolUseLocked(name, inputJson);
         for (Listener listener : mListeners) {
             try {
                 listener.onToolUse(name, inputJson);
@@ -747,6 +785,7 @@ public final class CodexExecSession {
     }
 
     private void emitToolResultLocked(String name, String summary, String full) {
+        recordToolResultLocked(name, summary, full);
         for (Listener listener : mListeners) {
             try {
                 listener.onToolResult(name, summary, full);
@@ -777,10 +816,52 @@ public final class CodexExecSession {
     }
 
     private void emitResultLocked(boolean isError, String errMsg) {
+        collapseTranscriptThinkingLocked();
         for (Listener listener : mListeners) {
             try {
                 listener.onResult(isError, errMsg);
             } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void recordThinkingLocked(String thinking) {
+        if (thinking == null || thinking.trim().isEmpty()) return;
+        synchronized (mTranscript) {
+            int thinkingIndex = ChatTurnOrdering.findThinkingIndex(mTranscript);
+            if (thinkingIndex >= 0) {
+                mTranscript.get(thinkingIndex).thinking = thinking.trim();
+                return;
+            }
+            ChatMessage message = ChatMessage.assistant("");
+            message.thinking = thinking.trim();
+            mTranscript.add(ChatTurnOrdering.findThinkingInsertIndex(mTranscript), message);
+        }
+    }
+
+    private void recordToolUseLocked(String name, String inputJson) {
+        synchronized (mTranscript) {
+            mTranscript.add(ChatTurnOrdering.findToolInsertIndex(mTranscript),
+                ChatMessage.toolUse(name, inputJson));
+        }
+    }
+
+    private void recordToolResultLocked(String name, String summary, String full) {
+        synchronized (mTranscript) {
+            mTranscript.add(ChatTurnOrdering.findToolInsertIndex(mTranscript),
+                ChatMessage.toolResult(name, summary, full));
+        }
+    }
+
+    private void collapseTranscriptThinkingLocked() {
+        synchronized (mTranscript) {
+            for (int i = mTranscript.size() - 1; i >= 0; i--) {
+                ChatMessage message = mTranscript.get(i);
+                if (message != null && message.type == ChatMessage.Type.ASSISTANT
+                        && message.thinking != null && !message.thinking.isEmpty()) {
+                    message.thinkingCollapsed = true;
+                    return;
+                }
             }
         }
     }

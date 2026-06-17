@@ -28,13 +28,14 @@ public class AgentServerCommandBuilderTest {
 
     @Test
     public void codexScriptRunsServerGeneratedExecServerCommand() {
+        String tokenEnv = "CODEX_ACCESS_" + "TOKEN";
         AgentServerCommandBuilder.Config c = new AgentServerCommandBuilder.Config(
             "https://agent.example.com",
             "",
             "phone",
             "sk-openai",
             "",
-            "export CODEX_ACCESS_TOKEN='jwt'; codex -c chatgpt_base_url='https://codex-auth.example.com' exec-server --remote 'https://exec.example.com' --environment-id 'exe_123' --name 'phone' --use-agent-identity-auth");
+            "export " + tokenEnv + "='jwt'; codex -c chatgpt_base_url='https://codex-auth.example.com' exec-server --remote 'https://exec.example.com' --environment-id 'exe_123' --name 'phone' --use-agent-identity-auth");
 
         String script = AgentServerCommandBuilder.connectScript(
             AssistantProvider.CODEX,

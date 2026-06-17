@@ -40,6 +40,11 @@ public class SettingsHubFragment extends Fragment {
             if (a != null) a.showAutomationSettingsMode();
         });
 
+        view.findViewById(R.id.settings_item_workspace_access).setOnClickListener(v -> {
+            TermuxActivity a = act();
+            if (a != null) a.showWorkspaceAccessSettingsMode();
+        });
+
         view.findViewById(R.id.settings_item_app_settings).setOnClickListener(v -> {
             startActivity(new Intent(requireContext(), SettingsActivity.class));
         });

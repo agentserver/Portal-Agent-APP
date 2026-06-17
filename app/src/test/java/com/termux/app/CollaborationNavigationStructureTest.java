@@ -34,16 +34,43 @@ public class CollaborationNavigationStructureTest {
         Assert.assertNotNull(findById(doc, "collaboration_runtime_card"));
         Assert.assertNotNull(findById(doc, "collaboration_agentserver_card"));
         Assert.assertNotNull(findById(doc, "collaboration_android_capabilities_card"));
+        Assert.assertNotNull(findById(doc, "btn_collaboration_workspace_access"));
         Assert.assertNotNull(findById(doc, "collaboration_driver_binding_dot"));
         Assert.assertNotNull(findById(doc, "collaboration_driver_binding_status"));
         Assert.assertNotNull(findById(doc, "btn_collaboration_bind_driver"));
+        Assert.assertNotNull(findById(doc, "collaboration_slave_machine"));
+        Assert.assertNotNull(findById(doc, "collaboration_slave_list"));
+        Assert.assertNotNull(findById(doc, "collaboration_empty_slaves"));
+        Assert.assertNotNull(findById(doc, "btn_collaboration_create_slave"));
+        Assert.assertNotNull(findById(doc, "btn_collaboration_refresh_slaves"));
         Assert.assertNotNull(findById(doc, "btn_collaboration_agentserver_optional"));
         Assert.assertNull(findById(doc, "collaboration_loom_card"));
         Assert.assertNull(findById(doc, "collaboration_update_area"));
         Assert.assertNotNull(findById(doc, "btn_collaboration_switch_provider"));
-        Assert.assertNotNull(findById(doc, "btn_collaboration_switch_role"));
-        Assert.assertNotNull(findById(doc, "btn_collaboration_start_role"));
-        Assert.assertNotNull(findById(doc, "btn_collaboration_stop_role"));
+        Assert.assertNull(findById(doc, "btn_collaboration_switch_role"));
+        Assert.assertNull(findById(doc, "btn_collaboration_start_role"));
+        Assert.assertNull(findById(doc, "btn_collaboration_stop_role"));
+    }
+
+    @Test
+    public void collaborationDashboardUsesManagedSlaveListLikeAgentServerApp() throws Exception {
+        Document doc = parseXml("src/main/res/layout/fragment_collaboration.xml");
+        String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
+
+        Assert.assertNotNull(findById(doc, "collaboration_slave_machine"));
+        Assert.assertNotNull(findById(doc, "collaboration_slave_list"));
+        Assert.assertNotNull(findById(doc, "btn_collaboration_create_slave"));
+        Assert.assertNotNull(findById(doc, "btn_collaboration_refresh_slaves"));
+        Assert.assertNull(findById(doc, "btn_collaboration_switch_role"));
+        Assert.assertNull(findById(doc, "btn_collaboration_start_role"));
+        Assert.assertNull(findById(doc, "btn_collaboration_stop_role"));
+        Assert.assertTrue(source.contains("LoomSlaveRegistry"));
+        Assert.assertTrue(source.contains("createManagedSlave"));
+        Assert.assertTrue(source.contains("startManagedSlave"));
+        Assert.assertTrue(source.contains("pauseManagedSlave"));
+        Assert.assertTrue(source.contains("deleteManagedSlave"));
+        Assert.assertFalse(source.contains("startSelectedRole"));
+        Assert.assertFalse(source.contains("stopSelectedRole"));
     }
 
     @Test
@@ -61,6 +88,8 @@ public class CollaborationNavigationStructureTest {
         Assert.assertEquals("true", loomSummary.getAttribute("android:focusable"));
         Assert.assertNull(findById(doc, "btn_collaboration_loom_settings"));
         Assert.assertNull(findById(doc, "btn_collaboration_workspace_settings"));
+        Assert.assertEquals("管理工作目录",
+            findById(doc, "btn_collaboration_workspace_access").getAttribute("android:text"));
         Assert.assertEquals("连接 AgentServer", agentServerButton.getAttribute("android:text"));
         Assert.assertEquals("false", agentServerButton.getAttribute("android:textAllCaps"));
         Assert.assertEquals("0", agentServerButton.getAttribute("android:letterSpacing"));
@@ -73,7 +102,7 @@ public class CollaborationNavigationStructureTest {
 
         Assert.assertFalse(xml.contains("旧版 AgentServer 连接页中配置/授权"));
         Assert.assertFalse(source.contains("旧版 AgentServer 连接页中配置/授权"));
-        Assert.assertTrue(xml.contains("绑定 Driver 后启动本机协作角色"));
+        Assert.assertTrue(xml.contains("绑定 Driver 后管理本机 Slave 列表"));
         Assert.assertTrue(xml.contains("扫码绑定 Driver 到当前 Agent"));
         Assert.assertFalse(xml.contains("绑定后同步 workspace"));
         Assert.assertTrue(source.contains("工作区：绑定后自动同步"));
@@ -101,8 +130,12 @@ public class CollaborationNavigationStructureTest {
         String xml = readSource("src/main/res/layout/fragment_collaboration.xml");
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
 
-        Assert.assertTrue(xml.contains("本机运行时与 Loom"));
+        Assert.assertTrue(xml.contains("本机 Slave 列表"));
+        Assert.assertTrue(xml.contains("Loom 编排设置"));
         Assert.assertTrue(xml.contains("AgentServer 连接"));
+        Assert.assertTrue(xml.contains("工作目录限制"));
+        Assert.assertTrue(xml.contains("管理应用/文件目录权限"));
+        Assert.assertTrue(source.contains("管理应用/文件目录权限"));
         Assert.assertFalse(xml.contains("更新区"));
         Assert.assertFalse(xml.contains("安装层保持分包"));
         Assert.assertFalse(source.contains("mUpdateSummary"));
@@ -112,47 +145,48 @@ public class CollaborationNavigationStructureTest {
     @Test
     public void collaborationRuntimeActionButtonsAreOutlined() throws Exception {
         Document doc = parseXml("src/main/res/layout/fragment_collaboration.xml");
-        Element switchRoleButton = findById(doc, "btn_collaboration_switch_role");
         Element bindDriverButton = findById(doc, "btn_collaboration_bind_driver");
         Element switchProviderButton = findById(doc, "btn_collaboration_switch_provider");
-        Element startRoleButton = findById(doc, "btn_collaboration_start_role");
-        Element stopRoleButton = findById(doc, "btn_collaboration_stop_role");
+        Element createSlaveButton = findById(doc, "btn_collaboration_create_slave");
+        Element refreshSlavesButton = findById(doc, "btn_collaboration_refresh_slaves");
+        Element optionalAgentServerButton = findById(doc, "btn_collaboration_agentserver_optional");
 
-        Assert.assertNotNull(switchRoleButton);
         Assert.assertNotNull(bindDriverButton);
         Assert.assertNotNull(switchProviderButton);
-        Assert.assertNotNull(startRoleButton);
-        Assert.assertNotNull(stopRoleButton);
-        Assert.assertTrue(switchRoleButton.getAttribute("style").contains("OutlinedButton"));
+        Assert.assertNotNull(createSlaveButton);
+        Assert.assertNotNull(refreshSlavesButton);
+        Assert.assertNotNull(optionalAgentServerButton);
         Assert.assertTrue(bindDriverButton.getAttribute("style").contains("OutlinedButton"));
         Assert.assertTrue(switchProviderButton.getAttribute("style").contains("OutlinedButton"));
-        Assert.assertTrue(stopRoleButton.getAttribute("style").contains("OutlinedButton"));
+        Assert.assertTrue(createSlaveButton.getAttribute("style").contains("OutlinedButton"));
+        Assert.assertTrue(refreshSlavesButton.getAttribute("style").contains("OutlinedButton"));
+        Assert.assertTrue(optionalAgentServerButton.getAttribute("style").contains("OutlinedButton"));
         Assert.assertEquals("切换 Agent", switchProviderButton.getAttribute("android:text"));
-        Assert.assertEquals("启动当前角色", startRoleButton.getAttribute("android:text"));
-        Assert.assertEquals("停止当前角色", stopRoleButton.getAttribute("android:text"));
-        Assert.assertEquals("false", switchRoleButton.getAttribute("android:textAllCaps"));
+        Assert.assertEquals("创建并启动 Slave", createSlaveButton.getAttribute("android:text"));
+        Assert.assertEquals("刷新", refreshSlavesButton.getAttribute("android:text"));
+        Assert.assertEquals("连接 AgentServer", optionalAgentServerButton.getAttribute("android:text"));
         Assert.assertEquals("false", bindDriverButton.getAttribute("android:textAllCaps"));
         Assert.assertEquals("false", switchProviderButton.getAttribute("android:textAllCaps"));
-        Assert.assertEquals("false", startRoleButton.getAttribute("android:textAllCaps"));
-        Assert.assertEquals("false", stopRoleButton.getAttribute("android:textAllCaps"));
-        Assert.assertEquals("0", switchRoleButton.getAttribute("android:letterSpacing"));
+        Assert.assertEquals("false", createSlaveButton.getAttribute("android:textAllCaps"));
+        Assert.assertEquals("false", refreshSlavesButton.getAttribute("android:textAllCaps"));
+        Assert.assertEquals("false", optionalAgentServerButton.getAttribute("android:textAllCaps"));
         Assert.assertEquals("0", bindDriverButton.getAttribute("android:letterSpacing"));
         Assert.assertEquals("0", switchProviderButton.getAttribute("android:letterSpacing"));
-        Assert.assertEquals("0", startRoleButton.getAttribute("android:letterSpacing"));
-        Assert.assertEquals("0", stopRoleButton.getAttribute("android:letterSpacing"));
-        Assert.assertEquals("112dp", switchRoleButton.getAttribute("android:layout_width"));
+        Assert.assertEquals("0", createSlaveButton.getAttribute("android:letterSpacing"));
+        Assert.assertEquals("0", refreshSlavesButton.getAttribute("android:letterSpacing"));
+        Assert.assertEquals("0", optionalAgentServerButton.getAttribute("android:letterSpacing"));
         Assert.assertEquals("112dp", switchProviderButton.getAttribute("android:layout_width"));
+        Assert.assertEquals("82dp", refreshSlavesButton.getAttribute("android:layout_width"));
+        Assert.assertEquals("match_parent", createSlaveButton.getAttribute("android:layout_width"));
         Assert.assertEquals("match_parent", bindDriverButton.getAttribute("android:layout_width"));
-        Assert.assertEquals("@color/app_primary_border",
-            switchRoleButton.getAttribute("app:strokeColor"));
         Assert.assertEquals("@color/app_primary_border",
             bindDriverButton.getAttribute("app:strokeColor"));
         Assert.assertEquals("@color/app_primary_border",
             switchProviderButton.getAttribute("app:strokeColor"));
         Assert.assertEquals("@color/app_accent",
-            startRoleButton.getAttribute("app:strokeColor"));
-        Assert.assertEquals("@color/app_warning",
-            stopRoleButton.getAttribute("app:strokeColor"));
+            createSlaveButton.getAttribute("app:strokeColor"));
+        Assert.assertEquals("@color/app_primary_border",
+            refreshSlavesButton.getAttribute("app:strokeColor"));
     }
 
     @Test
@@ -173,29 +207,37 @@ public class CollaborationNavigationStructureTest {
         Element runtimeCard = findById(doc, "collaboration_runtime_card");
         Element providerRow = findById(doc, "collaboration_provider_card");
         Element localAgentStatus = findById(doc, "collaboration_local_agent_status");
-        Element localSlaveStatus = findById(doc, "collaboration_local_slave_status");
+        Element slaveMachine = findById(doc, "collaboration_slave_machine");
+        Element emptySlaves = findById(doc, "collaboration_empty_slaves");
+        Element slaveList = findById(doc, "collaboration_slave_list");
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
 
         Assert.assertNotEquals("true", runtimeCard.getAttribute("android:clickable"));
         Assert.assertNotEquals("true", providerRow.getAttribute("android:clickable"));
         Assert.assertNotEquals("true", localAgentStatus.getAttribute("android:clickable"));
-        Assert.assertNotEquals("true", localSlaveStatus.getAttribute("android:clickable"));
+        Assert.assertNotEquals("true", slaveMachine.getAttribute("android:clickable"));
+        Assert.assertNotEquals("true", emptySlaves.getAttribute("android:clickable"));
+        Assert.assertNotEquals("true", slaveList.getAttribute("android:clickable"));
         Assert.assertFalse(source.contains("R.id.collaboration_runtime_card).setOnClickListener"));
         Assert.assertFalse(source.contains("R.id.collaboration_provider_card)\n            .setOnClickListener"));
         Assert.assertTrue(source.contains("R.id.btn_collaboration_switch_provider"));
+        Assert.assertTrue(source.contains("R.id.btn_collaboration_create_slave"));
+        Assert.assertTrue(source.contains("R.id.btn_collaboration_refresh_slaves"));
     }
 
     @Test
     public void collaborationRuntimeHidesInternalDefaultSlaveName() throws Exception {
-        Document doc = parseXml("src/main/res/layout/fragment_collaboration.xml");
-        Element localSlaveStatus = findById(doc, "collaboration_local_slave_status");
+        String xml = readSource("src/main/res/layout/fragment_collaboration.xml");
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
 
-        Assert.assertNotNull(localSlaveStatus);
-        Assert.assertFalse(localSlaveStatus.getAttribute("android:text").contains("slave-phone"));
-        Assert.assertFalse(localSlaveStatus.getAttribute("android:text").contains("All-in-one"));
-        Assert.assertTrue(localSlaveStatus.getAttribute("android:text").contains("本机身份"));
-        Assert.assertTrue(source.contains("本机身份 · "));
+        Assert.assertFalse(xml.contains("slave-phone"));
+        Assert.assertFalse(xml.contains("All-in-one"));
+        Assert.assertFalse(source.contains("slave-phone"));
+        Assert.assertFalse(source.contains("All-in-one"));
+        Assert.assertTrue(xml.contains("本机 Slave 列表"));
+        Assert.assertTrue(xml.contains("尚未创建 Slave"));
+        Assert.assertTrue(source.contains("本机 Slave · 新建默认使用"));
+        Assert.assertTrue(source.contains("\"Slave：\" + slave.displayName"));
     }
 
     @Test
@@ -211,51 +253,50 @@ public class CollaborationNavigationStructureTest {
     }
 
     @Test
-    public void collaborationFragmentSwitchesRoleWithoutBindingDriver() throws Exception {
+    public void collaborationFragmentRemovesRoleSwitchAndUsesManagedSlaveCreation() throws Exception {
         Document doc = parseXml("src/main/res/layout/fragment_collaboration.xml");
         Element runtimeCard = findById(doc, "collaboration_runtime_card");
-        Element switchRoleButton = findById(doc, "btn_collaboration_switch_role");
+        Element createSlaveButton = findById(doc, "btn_collaboration_create_slave");
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
 
         Assert.assertNotEquals("true", runtimeCard.getAttribute("android:clickable"));
-        Assert.assertNotNull(switchRoleButton);
-        Assert.assertEquals("切换身份", switchRoleButton.getAttribute("android:text"));
-        Assert.assertTrue(source.contains("showRoleDialog()"));
-        Assert.assertTrue(source.contains("btn_collaboration_switch_role"));
-        Assert.assertTrue(source.contains("switchRoleOnly"));
-        Assert.assertTrue(source.contains("LoomSettings.KEY_ROLE_MODE"));
+        Assert.assertNotNull(createSlaveButton);
+        Assert.assertEquals("创建并启动 Slave", createSlaveButton.getAttribute("android:text"));
+        Assert.assertFalse(source.contains("showRoleDialog()"));
+        Assert.assertFalse(source.contains("btn_collaboration_switch_role"));
+        Assert.assertFalse(source.contains("switchRoleOnly"));
         Assert.assertFalse(source.contains("switchRoleAndBind"));
+        Assert.assertTrue(source.contains("createManagedSlave"));
+        Assert.assertTrue(source.contains("LoomSlaveRegistry"));
     }
 
     @Test
-    public void collaborationRoleSwitchOnlyOffersObserverAndSlave() throws Exception {
+    public void collaborationNoLongerOffersFixedRoleSwitchChoices() throws Exception {
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java")
             .replace("\r\n", "\n");
 
-        Assert.assertTrue(source.contains("private static final String[] ROLE_LABELS = {\n"
-            + "        \"Observer\", \"Slave\"\n"
-            + "    };"));
-        Assert.assertTrue(source.contains("private static final String[] ROLE_VALUES = {\n"
-            + "        \"observer\", \"slave\"\n"
-            + "    };"));
+        Assert.assertFalse(source.contains("private static final String[] ROLE_LABELS"));
+        Assert.assertFalse(source.contains("private static final String[] ROLE_VALUES"));
         Assert.assertFalse(source.contains("\"All-in-one\", \"Observer\", \"Driver\", \"Slave\""));
         Assert.assertFalse(source.contains("\"all\", \"observer\", \"driver\", \"slave\""));
     }
 
     @Test
-    public void collaborationFragmentStartsAndStopsSelectedLoomRole() throws Exception {
+    public void collaborationFragmentStartsPausesAndDeletesManagedSlaves() throws Exception {
         String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
 
-        Assert.assertTrue(source.contains("R.id.btn_collaboration_start_role"));
-        Assert.assertTrue(source.contains("R.id.btn_collaboration_stop_role"));
-        Assert.assertTrue(source.contains("startSelectedRole"));
-        Assert.assertTrue(source.contains("stopSelectedRole"));
-        Assert.assertTrue(source.contains("LoomCommandBuilder.startObserverScript"));
-        Assert.assertTrue(source.contains("LoomCommandBuilder.startSlaveScript"));
-        Assert.assertTrue(source.contains("LoomCommandBuilder.stopObserverScript"));
-        Assert.assertTrue(source.contains("LoomCommandBuilder.stopSlaveScript"));
-        Assert.assertTrue(source.contains("rememberRuntimeProvider"));
-        Assert.assertTrue(source.contains("Driver 尚未绑定"));
+        Assert.assertTrue(source.contains("startManagedSlave"));
+        Assert.assertTrue(source.contains("pauseManagedSlave"));
+        Assert.assertTrue(source.contains("deleteManagedSlave"));
+        Assert.assertTrue(source.contains("__LOOM_SLAVE_ERROR__="));
+        Assert.assertTrue(source.contains("LoomCommandBuilder.startManagedSlaveRuntimeScript"));
+        Assert.assertTrue(source.contains("LoomCommandBuilder.stopManagedSlaveScript"));
+        Assert.assertTrue(source.contains("registry.delete(slave.id)"));
+        Assert.assertFalse(source.contains("R.id.btn_collaboration_start_role"));
+        Assert.assertFalse(source.contains("R.id.btn_collaboration_stop_role"));
+        Assert.assertFalse(source.contains("startSelectedRole"));
+        Assert.assertFalse(source.contains("stopSelectedRole"));
+        Assert.assertFalse(source.contains("rememberRuntimeProvider"));
         Assert.assertFalse(source.contains("LoomCommandBuilder.startAllInOneScript"));
     }
 
@@ -281,6 +322,15 @@ public class CollaborationNavigationStructureTest {
     }
 
     @Test
+    public void collaborationDismissesAuthDialogAfterSlaveLeavesAuthState() throws Exception {
+        String source = readSource("src/main/java/com/termux/app/CollaborationFragment.java");
+
+        Assert.assertTrue(source.contains("dismissAuthDialogIfNoAuthRequired(slaves)"));
+        Assert.assertTrue(source.contains("LoomSlaveStatus.AUTH_REQUIRED.equals(slave.status)"));
+        Assert.assertTrue(source.contains("dismissAuthDialog();"));
+    }
+
+    @Test
     public void settingsHubNoLongerOwnsAgentserverAndLoomEntries() throws Exception {
         Document doc = parseXml("src/main/res/layout/fragment_settings_hub.xml");
 
@@ -294,6 +344,7 @@ public class CollaborationNavigationStructureTest {
 
         Assert.assertTrue(source.contains("showAgentServerMode()"));
         Assert.assertTrue(source.contains("showLoomMode()"));
+        Assert.assertTrue(source.contains("showWorkspaceAccessSettingsMode()"));
     }
 
     private static Document parseXml(String relativePath) throws Exception {

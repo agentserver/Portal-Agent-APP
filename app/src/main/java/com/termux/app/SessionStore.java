@@ -16,7 +16,8 @@ import java.util.Locale;
  */
 public class SessionStore {
 
-    private static final String PREFS     = "claude_sessions";
+    private static final String PREFS_CLAUDE = "claude_sessions";
+    private static final String PREFS_CODEX  = "codex_sessions";
     private static final String K_COUNT   = "count";
     private static final int    MAX_ITEMS = 50;
 
@@ -53,7 +54,16 @@ public class SessionStore {
     private final SharedPreferences mPrefs;
 
     public SessionStore(Context ctx) {
-        mPrefs = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this(ctx, AssistantProvider.CLAUDE);
+    }
+
+    public SessionStore(Context ctx, AssistantProvider provider) {
+        mPrefs = ctx.getApplicationContext()
+            .getSharedPreferences(prefsNameForProvider(provider), Context.MODE_PRIVATE);
+    }
+
+    public static String prefsNameForProvider(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? PREFS_CODEX : PREFS_CLAUDE;
     }
 
     /** 读取所有条目（最近在前）。 */

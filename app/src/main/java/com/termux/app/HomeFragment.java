@@ -86,8 +86,8 @@ public class HomeFragment extends Fragment {
     // Ubuntu rootfs 内 claude 用户目录
     private static final String UBUNTU_CLAUDE_HOME =
         PREFIX + "/var/lib/proot-distro/installed-rootfs/ubuntu/home/claude";
-    private static final String MEMORY_DIR = UBUNTU_CLAUDE_HOME + "/.claude/memory";
-    private static final String SKILLS_DIR = UBUNTU_CLAUDE_HOME + "/.claude/commands";
+    private static final String UBUNTU_CODEX_HOME =
+        PREFIX + "/var/lib/proot-distro/installed-rootfs/ubuntu/home/codex";
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
@@ -108,6 +108,7 @@ public class HomeFragment extends Fragment {
     private static final int REQUEST_CODE_PICK_FILE = 1002;
     private String mAttachmentPath; // 已复制到 Termux home 的绝对路径
     private String mAttachmentName; // 用于 UI 显示的文件名
+    private AssistantProvider mAttachmentProvider;
 
     // ── 抽屉 Tab ──────────────────────────────────────────────────────────
     private ViewFlipper mDrawerFlipper;
@@ -134,8 +135,8 @@ public class HomeFragment extends Fragment {
     }
 
     // ── AgentServer 任务面板 ──────────────────────────────────────────────
-    private static final String AGENT_PIPE_FILE = UBUNTU_CLAUDE_HOME + "/.agentserver-pipe.jsonl";
-    private static final String PREF_AGENT_PIPE = "agent_pipe";
+    private static final String PREF_AGENT_PIPE_CLAUDE = "agent_pipe";
+    private static final String PREF_AGENT_PIPE_CODEX  = "agent_pipe_codex";
     private static final String KEY_AGENT_PIPE_OFFSET = "offset";
     private RecyclerView          mAgentTaskRecycler;
     private TextView              mAgentTaskEmptyHint;
@@ -148,8 +149,10 @@ public class HomeFragment extends Fragment {
 
     // ── 历史会话抽屉 ──────────────────────────────────────────────────────
     private SessionStore               mSessionStore;
+    private ChatTranscriptStore        mTranscriptStore;
     private List<SessionStore.Entry>   mSessionEntries;
     private SessionAdapter             mSessionAdapter;
+    private TextView                   mSessionEmptyHint;
 
     // ── 记忆库 ────────────────────────────────────────────────────────────
     private final List<DrawerFileAdapter.FileItem> mMemoryItems  = new ArrayList<>();
@@ -182,9 +185,11 @@ public class HomeFragment extends Fragment {
 
     /** 当前捕获到的 Claude session ID（从 type=result 事件提取）。 */
     private String  mCurrentSessionId = null;
-
-    /** 已写入日志文件的条目数（每次 appendChatLog 时自增），用于同步时跳过已知内容。 */
-    private int mSyncedLogEntries = 0;
+    private String  mClaudeCurrentSessionId = null;
+    private String  mCodexCurrentSessionId = null;
+    private static final String PREF_HOME_CURRENT_SESSIONS = "home_current_sessions";
+    private static final String KEY_CURRENT_CLAUDE = "current_claude";
+    private static final String KEY_CURRENT_CODEX  = "current_codex";
 
     // =========================================================================
 
@@ -202,6 +207,11 @@ public class HomeFragment extends Fragment {
 
         mProviderStore = new ProviderSettingsStore(requireContext());
         mProvider = mProviderStore.getSelectedProvider();
+        mClaudeCurrentSessionId = loadSavedSessionId(AssistantProvider.CLAUDE);
+        mCodexCurrentSessionId = loadSavedSessionId(AssistantProvider.CODEX);
+        mCurrentSessionId = mProvider == AssistantProvider.CODEX
+            ? mCodexCurrentSessionId
+            : mClaudeCurrentSessionId;
 
         mDrawerLayout = view.findViewById(R.id.home_drawer_layout);
 
@@ -244,7 +254,7 @@ public class HomeFragment extends Fragment {
         mTabUploads  .setOnClickListener(v -> { switchDrawerTab(4); loadUploadFiles(); });
 
         // ── AgentServer 任务面板（列表形式）─────────────────────────────────
-        mAgentTaskStore     = new AgentTaskStore(requireContext());
+        mAgentTaskStore     = new AgentTaskStore(requireContext(), mProvider);
         mAgentTaskEmptyHint = view.findViewById(R.id.agent_task_empty_hint);
         mAgentTaskRecycler  = view.findViewById(R.id.agent_task_recycler);
         mAgentTasks.clear();
@@ -254,7 +264,7 @@ public class HomeFragment extends Fragment {
                 @Override public void onTap(AgentTask task) {
                     if (act() != null) {
                         mDrawerLayout.closeDrawers();
-                        act().showAgentTaskDetailMode(task.id);
+                        act().showAgentTaskDetailMode(mProvider, task.id);
                     }
                 }
                 @Override public void onLongPress(AgentTask task) {
@@ -291,40 +301,27 @@ public class HomeFragment extends Fragment {
         });
 
         // Pipe watcher：用持久化 offset 续读，否则只回放末尾一小段
-        File pipeFile = new File(AGENT_PIPE_FILE);
-        SharedPreferences pipePrefs = requireContext()
-            .getSharedPreferences(PREF_AGENT_PIPE, Context.MODE_PRIVATE);
-        boolean hasSavedOffset = pipePrefs.contains(KEY_AGENT_PIPE_OFFSET);
-        long savedOffset = pipePrefs.getLong(KEY_AGENT_PIPE_OFFSET, 0);
-        if (!hasSavedOffset && pipeFile.exists()) {
-            savedOffset = Math.max(0, pipeFile.length() - 200_000);
-        }
-        mAgentPipeOffset = pipeFile.exists() ? Math.min(savedOffset, pipeFile.length()) : 0;
+        loadAgentPipeOffsetForCurrentProvider();
         processNewPipeLines();
         startAgentPipeWatcher();
 
         // ── 上传文件面板 ──────────────────────────────────────────────────
-        mUploadStore     = new UploadStore(requireContext());
+        mUploadStore     = new UploadStore(requireContext(), mProvider);
         mUploadRecycler  = view.findViewById(R.id.upload_recycler);
         mUploadEmptyHint = view.findViewById(R.id.upload_empty_hint);
         setupUploadRecycler();
         view.findViewById(R.id.btn_uploads_clear_all).setOnClickListener(v -> clearAllUploads());
 
         // ── 历史会话抽屉 ──────────────────────────────────────────────────
-        mSessionStore   = new SessionStore(requireContext());
+        mSessionStore   = new SessionStore(requireContext(), mProvider);
+        mTranscriptStore = new ChatTranscriptStore(requireContext(), mProvider);
         mSessionEntries = mSessionStore.loadAll();
         // 启动自洁：删除 SessionStore 已不持有的 jsonl 孤儿（来自旧版 leak）
         cleanupOrphanClaudeJsonl();
-        TextView emptyHint = view.findViewById(R.id.session_empty_hint);
+        mSessionEmptyHint = view.findViewById(R.id.session_empty_hint);
         mSessionAdapter = new SessionAdapter(mSessionEntries, mCurrentSessionId,
             new SessionAdapter.Listener() {
                 @Override public void onSessionSelected(SessionStore.Entry entry) {
-                    if (mProvider != AssistantProvider.CLAUDE) {
-                        Toast.makeText(getContext(),
-                            "历史记录仅适用于 Claude Code，请先切换到 Claude Code",
-                            Toast.LENGTH_SHORT).show();
-                        return;
-                    }
                     resumeSession(entry);
                     mDrawerLayout.closeDrawers();
                 }
@@ -335,19 +332,25 @@ public class HomeFragment extends Fragment {
                         .setMessage(entry.preview.isEmpty() ? "（空对话）" : entry.preview)
                         .setPositiveButton("删除", (d, w) -> {
                             mSessionStore.delete(entry.id);
+                            if (mProvider == AssistantProvider.CODEX && mTranscriptStore != null) {
+                                mTranscriptStore.delete(entry.id);
+                            }
                             mSessionEntries.remove(entry);
                             mSessionAdapter.notifyDataSetChanged();
-                            emptyHint.setVisibility(
+                            mSessionEmptyHint.setVisibility(
                                 mSessionEntries.isEmpty() ? View.VISIBLE : View.GONE);
                             // 同步删除该对话关联的上传文件（rm -rf 每个 UUID 目录）
                             List<UploadStore.Entry> toDelete = mUploadStore.deleteSession(entry.id);
                             if (!toDelete.isEmpty()) {
                                 final List<String> uuids = new ArrayList<>();
                                 for (UploadStore.Entry e : toDelete) uuids.add(e.uuid);
-                                new Thread(() -> deleteUbuntuUploadDirs(uuids)).start();
+                                final AssistantProvider provider = mProvider;
+                                new Thread(() -> deleteUbuntuUploadDirs(provider, uuids)).start();
                             }
                             // 同步删除 Claude session jsonl（释放磁盘里的图片/历史）
-                            new Thread(() -> deleteClaudeSessionJsonl(entry.id)).start();
+                            if (mProvider == AssistantProvider.CLAUDE) {
+                                new Thread(() -> deleteClaudeSessionJsonl(entry.id)).start();
+                            }
                         })
                         .setNegativeButton("取消", null)
                         .show();
@@ -356,7 +359,7 @@ public class HomeFragment extends Fragment {
         RecyclerView sessionRecycler = view.findViewById(R.id.session_recycler);
         sessionRecycler.setLayoutManager(new LinearLayoutManager(getContext()));
         sessionRecycler.setAdapter(mSessionAdapter);
-        emptyHint.setVisibility(mSessionEntries.isEmpty() ? View.VISIBLE : View.GONE);
+        mSessionEmptyHint.setVisibility(mSessionEntries.isEmpty() ? View.VISIBLE : View.GONE);
 
         // ── 记忆库 RecyclerView ───────────────────────────────────────────
         mMemoryAdapter = new DrawerFileAdapter(mMemoryItems, new DrawerFileAdapter.Listener() {
@@ -420,6 +423,12 @@ public class HomeFragment extends Fragment {
             }
             mWaitingResponse  = false;
             mCurrentSessionId = null;
+            if (mProvider == AssistantProvider.CODEX) {
+                mCodexCurrentSessionId = null;
+            } else {
+                mClaudeCurrentSessionId = null;
+            }
+            saveSessionIdForProvider(mProvider, null);
             mTurnOutputAnchored = false;
             mMessages.clear();
             mAdapter.notifyDataSetChanged();
@@ -540,6 +549,12 @@ public class HomeFragment extends Fragment {
         String typed = mInputEdit.getText().toString().trim();
         String text = typed;
         if (text.isEmpty() && mAttachmentPath == null) { terminal("\r"); return; }
+        if (mAttachmentPath != null && mAttachmentProvider != null
+                && mAttachmentProvider != mProvider) {
+            Toast.makeText(getContext(), "附件属于其他助手，请重新选择文件", Toast.LENGTH_SHORT).show();
+            clearAttachment();
+            return;
+        }
 
         // 有附件时拼接文件引用（附件路径 + 用户文字）
         final String pendingPath = mAttachmentPath;
@@ -608,9 +623,27 @@ public class HomeFragment extends Fragment {
 
         mAutomationTurnStartMs = mAutomationRuntime != null ? mAutomationRuntime.markTurnStarted() : 0L;
         if (mProvider == AssistantProvider.CODEX) {
+            ensureCodexSession(displayText);
             mCodexSession.send(text, apiKey, baseUrl);
         } else {
             mClaudeSession.send(text, apiKey, baseUrl);
+        }
+    }
+
+    private void ensureCodexSession(String preview) {
+        if (mCurrentSessionId == null || !mCurrentSessionId.startsWith("codex-")) {
+            mCurrentSessionId = "codex-" + System.currentTimeMillis() + "-"
+                + java.util.UUID.randomUUID().toString();
+            mCodexCurrentSessionId = mCurrentSessionId;
+            saveSessionIdForProvider(AssistantProvider.CODEX, mCurrentSessionId);
+            if (mUploadStore != null) mUploadStore.commitPending(mCurrentSessionId);
+            if (mSessionAdapter != null) mSessionAdapter.setActiveId(mCurrentSessionId);
+            updateSessionTitle(preview);
+        }
+        if (mSessionStore != null) {
+            mSessionStore.add(mCurrentSessionId, System.currentTimeMillis(),
+                preview == null ? "" : preview);
+            refreshSessionDrawer();
         }
     }
 
@@ -727,23 +760,58 @@ public class HomeFragment extends Fragment {
         if (next == null) next = AssistantProvider.CODEX;
         mUiGeneration++;
         cancelAutomationBoost();
-        resetAllProviderConversations();
+        rememberCurrentProviderSessionId();
+        if (isAnyProviderBusy()) stopActiveProviderProcess();
         mProvider = next;
+        mCurrentSessionId = mProvider == AssistantProvider.CODEX
+            ? mCodexCurrentSessionId
+            : mClaudeCurrentSessionId;
         if (mProviderStore != null) mProviderStore.setSelectedProvider(next);
+        configureProviderStores();
         updateAssistantLabel();
         mWaitingResponse = false;
-        mCurrentSessionId = null;
         mTurnOutputAnchored = false;
         clearAttachment();
         mMessages.clear();
         mAdapter.notifyDataSetChanged();
-        if (mSessionAdapter != null) mSessionAdapter.setActiveId(null);
+        if (mSessionAdapter != null) mSessionAdapter.setActiveId(mCurrentSessionId);
         updateSessionTitle(null);
         updateStatus("● 就绪", 0xFF2E7D32);
         FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
         ProviderProfile profile = ProviderProfile.forProvider(mProvider);
         mAdapter.addMessage(ChatMessage.system("已切换到 " + profile.displayName));
+        if (mProvider == AssistantProvider.CODEX) {
+            restoreCodexTranscriptIfNeeded();
+        }
         scrollToBottom();
+    }
+
+    private void rememberCurrentProviderSessionId() {
+        if (mProvider == AssistantProvider.CODEX) {
+            mCodexCurrentSessionId = mCurrentSessionId;
+        } else {
+            mClaudeCurrentSessionId = mCurrentSessionId;
+        }
+        saveSessionIdForProvider(mProvider, mCurrentSessionId);
+    }
+
+    private void configureProviderStores() {
+        if (getContext() == null) return;
+        mSessionStore = new SessionStore(requireContext(), mProvider);
+        mTranscriptStore = new ChatTranscriptStore(requireContext(), mProvider);
+        mUploadStore = new UploadStore(requireContext(), mProvider);
+        mAgentTaskStore = new AgentTaskStore(requireContext(), mProvider);
+        refreshSessionDrawer();
+        refreshAgentTaskDrawer();
+        loadAgentPipeOffsetForCurrentProvider();
+        processNewPipeLines();
+        mMemoryItems.clear();
+        mSkillsItems.clear();
+        mUploadItems.clear();
+        if (mMemoryAdapter != null) mMemoryAdapter.notifyDataSetChanged();
+        if (mSkillsAdapter != null) mSkillsAdapter.notifyDataSetChanged();
+        if (mUploadAdapter != null) mUploadAdapter.notifyDataSetChanged();
+        if (mUploadEmptyHint != null) mUploadEmptyHint.setVisibility(View.VISIBLE);
     }
 
     private void updateAssistantLabel() {
@@ -769,12 +837,6 @@ public class HomeFragment extends Fragment {
         }
     }
 
-    private void resetAllProviderConversations() {
-        cancelAutomationBoost();
-        if (mClaudeSession != null) mClaudeSession.resetForNewConversation();
-        if (mCodexSession != null) mCodexSession.resetForNewConversation();
-    }
-
     private void postProviderUi(AssistantProvider provider, int viewGeneration, Runnable action) {
         if (!mViewActive || mViewGeneration != viewGeneration) return;
         final int generation = mUiGeneration;
@@ -794,6 +856,25 @@ public class HomeFragment extends Fragment {
         if (mProvider != AssistantProvider.CODEX || mCodexSession == null || mAdapter == null) return;
         List<ChatMessage> snapshot = mCodexSession.snapshotTranscript();
         boolean running = mCodexSession.isRunning();
+        if (snapshot.isEmpty() && !running) {
+            if (mCurrentSessionId == null && mSessionStore != null
+                    && !hasSavedSessionKey(AssistantProvider.CODEX)) {
+                List<SessionStore.Entry> entries = mSessionStore.loadAll();
+                if (!entries.isEmpty()) {
+                    mCurrentSessionId = entries.get(0).id;
+                    mCodexCurrentSessionId = mCurrentSessionId;
+                    saveSessionIdForProvider(AssistantProvider.CODEX, mCurrentSessionId);
+                }
+            }
+            if (mCurrentSessionId != null && mTranscriptStore != null) {
+                List<ChatMessage> stored = mTranscriptStore.load(mCurrentSessionId);
+                if (!stored.isEmpty()) {
+                    mCodexSession.loadTranscript(stored);
+                    snapshot = stored;
+                    if (mSessionAdapter != null) mSessionAdapter.setActiveId(mCurrentSessionId);
+                }
+            }
+        }
         if (snapshot.isEmpty() && !running) return;
 
         mMessages.clear();
@@ -862,6 +943,8 @@ public class HomeFragment extends Fragment {
     private void copyFileAsync(Uri uri) {
         mAttachmentPreviewRow.setVisibility(View.VISIBLE);
         mAttachmentNameText.setText("附件准备中…");
+        final AssistantProvider targetProvider = mProvider;
+        final ProviderProfile targetProfile = ProviderProfile.forProvider(targetProvider);
 
         new Thread(() -> {
             try {
@@ -885,10 +968,9 @@ public class HomeFragment extends Fragment {
                     + " && cp /tmp/.upload_src ~/uploads/'" + uploadUuid + "'/'" + finalName + "'"
                     + " && echo ~/uploads/'" + uploadUuid + "'/'" + finalName + "'";
 
-                // --user claude: 与 sendOrConfirm 保持一致（claude -p 以 claude 用户运行）
-                // ~ 展开为 /home/claude/，文件落在 /home/claude/uploads/<uuid>/<filename>
+                // 与当前助手用户保持一致，保证附件路径能被对应 CLI 读取。
                 ProcessBuilder pb = new ProcessBuilder(PROOT_D, "login", "ubuntu",
-                    "--user", "claude",
+                    "--user", targetProfile.user,
                     "--bind", cacheFile.getAbsolutePath() + ":/tmp/.upload_src",
                     "--", "sh", "-c", shell);
                 setupEnv(pb.environment(), "", "");
@@ -907,11 +989,14 @@ public class HomeFragment extends Fragment {
 
                 final String finalProotPath = prootPath.trim();
                 // 追踪：若已有 session 直接写真桶，否则写 pending 桶（commitPending 时迁移元数据）
-                String trackSid = mCurrentSessionId != null ? mCurrentSessionId : UploadStore.PENDING;
-                mUploadStore.addFile(trackSid, uploadUuid, finalName);
+                String targetSessionId = targetProvider == AssistantProvider.CODEX
+                    ? mCodexCurrentSessionId : mClaudeCurrentSessionId;
+                String trackSid = targetSessionId != null ? targetSessionId : UploadStore.PENDING;
+                new UploadStore(requireContext(), targetProvider).addFile(trackSid, uploadUuid, finalName);
                 mHandler.post(() -> {
-                    mAttachmentPath = finalProotPath; // proot-visible path passed to Claude Code
+                    mAttachmentPath = finalProotPath; // proot-visible path passed to current assistant
                     mAttachmentName = finalName;
+                    mAttachmentProvider = targetProvider;
                     mAttachmentNameText.setText("附件：" + finalName);
                 });
             } catch (Exception e) {
@@ -944,6 +1029,7 @@ public class HomeFragment extends Fragment {
     private void clearAttachment() {
         mAttachmentPath = null;
         mAttachmentName = null;
+        mAttachmentProvider = null;
         if (mAttachmentPreviewRow != null)
             mAttachmentPreviewRow.setVisibility(View.GONE);
     }
@@ -960,7 +1046,6 @@ public class HomeFragment extends Fragment {
             BufferedWriter bw = new BufferedWriter(new FileWriter(logPath, true));
             bw.write(entry);
             bw.close();
-            mSyncedLogEntries++; // 记录已知条目数，同步时跳过它
         } catch (Exception ignored) {}
     }
 
@@ -997,12 +1082,17 @@ public class HomeFragment extends Fragment {
 
     /** 从历史列表恢复指定会话：清空 UI、设置 resume ID、更新标题，并异步回放历史对话气泡。 */
     private void resumeSession(SessionStore.Entry entry) {
-        if (mProvider != AssistantProvider.CLAUDE) return;
+        if (mProvider == AssistantProvider.CODEX) {
+            resumeCodexSession(entry);
+            return;
+        }
         mUiGeneration++;
         mClaudeSession.startWithResume(entry.id);   // kill 当前 + 标记下条 --resume entry.id
         mMessages.clear();
         mAdapter.notifyDataSetChanged();
         mCurrentSessionId = entry.id;
+        mClaudeCurrentSessionId = entry.id;
+        saveSessionIdForProvider(AssistantProvider.CLAUDE, entry.id);
         mWaitingResponse  = false;
         updateStatus("● 就绪", 0xFF2E7D32);
         mAdapter.addMessage(ChatMessage.system("已切换到历史对话：" + entry.formatTime() + "（加载中…）"));
@@ -1029,6 +1119,34 @@ public class HomeFragment extends Fragment {
                 scrollToBottom();
             });
         }, "load-session-history").start();
+    }
+
+    private void resumeCodexSession(SessionStore.Entry entry) {
+        if (entry == null || mCodexSession == null || mTranscriptStore == null) return;
+        if (mCodexSession.isRunning()) {
+            Toast.makeText(getContext(), "Codex 正在运行，请先停止当前任务", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mUiGeneration++;
+        List<ChatMessage> history = mTranscriptStore.load(entry.id);
+        mCodexSession.loadTranscript(history);
+        mCurrentSessionId = entry.id;
+        mCodexCurrentSessionId = entry.id;
+        saveSessionIdForProvider(AssistantProvider.CODEX, entry.id);
+        mWaitingResponse = false;
+        mTurnOutputAnchored = false;
+        mMessages.clear();
+        mMessages.add(ChatMessage.system("── Codex 历史对话：" + entry.formatTime() + " ──"));
+        if (history.isEmpty()) {
+            mMessages.add(ChatMessage.system("（该对话历史已被清理或无内容）"));
+        } else {
+            mMessages.addAll(history);
+        }
+        mAdapter.notifyDataSetChanged();
+        updateStatus("● 就绪", 0xFF2E7D32);
+        updateSessionTitle(entry.preview);
+        if (mSessionAdapter != null) mSessionAdapter.setActiveId(entry.id);
+        scrollToBottom();
     }
 
     /** 解析 Claude 自身保存的 session jsonl，转换为 ChatMessage 列表用于回放。 */
@@ -1110,9 +1228,76 @@ public class HomeFragment extends Fragment {
 
     /** 重新从 SessionStore 加载列表，刷新抽屉。 */
     private void refreshSessionDrawer() {
+        if (mSessionStore == null || mSessionEntries == null || mSessionAdapter == null) return;
         mSessionEntries.clear();
         mSessionEntries.addAll(mSessionStore.loadAll());
         mSessionAdapter.setActiveId(mCurrentSessionId);
+        mSessionAdapter.notifyDataSetChanged();
+        if (mSessionEmptyHint != null) {
+            mSessionEmptyHint.setVisibility(mSessionEntries.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void refreshAgentTaskDrawer() {
+        if (mAgentTaskStore == null || mAgentTasks == null || mAgentTaskAdapter == null) return;
+        mActiveAgentTask = null;
+        mAgentTasks.clear();
+        mAgentTasks.addAll(mAgentTaskStore.loadAll());
+        mAgentTaskAdapter.notifyDataSetChanged();
+        if (mAgentTaskEmptyHint != null) {
+            mAgentTaskEmptyHint.setVisibility(mAgentTasks.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void loadAgentPipeOffsetForCurrentProvider() {
+        if (getContext() == null) return;
+        File pipeFile = new File(agentPipeFilePath(mProvider));
+        SharedPreferences pipePrefs = requireContext()
+            .getSharedPreferences(agentPipePrefsName(mProvider), Context.MODE_PRIVATE);
+        boolean hasSavedOffset = pipePrefs.contains(KEY_AGENT_PIPE_OFFSET);
+        long savedOffset = pipePrefs.getLong(KEY_AGENT_PIPE_OFFSET, 0);
+        if (!hasSavedOffset && pipeFile.exists()) {
+            savedOffset = Math.max(0, pipeFile.length() - 200_000);
+        }
+        mAgentPipeOffset = pipeFile.exists() ? Math.min(savedOffset, pipeFile.length()) : 0;
+    }
+
+    private static String agentPipePrefsName(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? PREF_AGENT_PIPE_CODEX : PREF_AGENT_PIPE_CLAUDE;
+    }
+
+    private static String agentPipeFilePath(AssistantProvider provider) {
+        return ubuntuHomeForProvider(provider) + "/.agentserver-pipe.jsonl";
+    }
+
+    private static String ubuntuHomeForProvider(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? UBUNTU_CODEX_HOME : UBUNTU_CLAUDE_HOME;
+    }
+
+    private String loadSavedSessionId(AssistantProvider provider) {
+        SharedPreferences prefs = requireContext()
+            .getSharedPreferences(PREF_HOME_CURRENT_SESSIONS, Context.MODE_PRIVATE);
+        String value = prefs.getString(currentSessionKey(provider), null);
+        return value == null || value.isEmpty() ? null : value;
+    }
+
+    private boolean hasSavedSessionKey(AssistantProvider provider) {
+        return requireContext()
+            .getSharedPreferences(PREF_HOME_CURRENT_SESSIONS, Context.MODE_PRIVATE)
+            .contains(currentSessionKey(provider));
+    }
+
+    private void saveSessionIdForProvider(AssistantProvider provider, String sessionId) {
+        if (getContext() == null) return;
+        requireContext()
+            .getSharedPreferences(PREF_HOME_CURRENT_SESSIONS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(currentSessionKey(provider), sessionId == null ? "" : sessionId)
+            .apply();
+    }
+
+    private static String currentSessionKey(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? KEY_CURRENT_CODEX : KEY_CURRENT_CLAUDE;
     }
 
     /** 更新顶栏提供商切换控件。 */
@@ -1187,27 +1372,6 @@ public class HomeFragment extends Fragment {
             }
         }
         return mMessages.isEmpty() ? -1 : 0;
-    }
-
-    /**
-     * 由 TermuxActivity.syncChatLogToHome() 在主线程调用。
-     * 传入日志文件解析后的所有条目，只把第 mSyncedLogEntries 条之后的新内容加入 UI。
-     * entries: 每项为 [header, body]，header 形如 "[14:32:01] 你"。
-     */
-    public void syncFromLog(java.util.List<String[]> entries) {
-        int start = mSyncedLogEntries; // 跳过本 Fragment 自己写过的条目
-        for (int i = start; i < entries.size(); i++) {
-            String header = entries.get(i)[0];
-            String body   = entries.get(i)[1];
-            if (header.contains("] 你")) {
-                mAdapter.addMessage(ChatMessage.user(body));
-            } else if (header.contains("] Claude")) {
-                mAdapter.addMessage(ChatMessage.assistant(body));
-            } else {
-                mAdapter.addMessage(ChatMessage.system(body));
-            }
-            mSyncedLogEntries++;
-        }
     }
 
     /** 删除当前 turn 范围内（USER 之后的）所有空的 / "…" 占位 ASSISTANT 气泡。
@@ -1300,8 +1464,9 @@ public class HomeFragment extends Fragment {
                         .setPositiveButton("删除", (d, w) -> {
                             mUploadStore.deleteByUuid(item.sessionId, item.uuid);
                             final String uuid = item.uuid;
+                            final AssistantProvider provider = mProvider;
                             new Thread(() -> deleteUbuntuUploadDirs(
-                                java.util.Collections.singletonList(uuid))).start();
+                                provider, java.util.Collections.singletonList(uuid))).start();
                             mUploadItems.remove(item);
                             mUploadAdapter.notifyDataSetChanged();
                             mUploadEmptyHint.setVisibility(
@@ -1354,10 +1519,11 @@ public class HomeFragment extends Fragment {
     }
 
     /** 清空整个 ~/uploads/ 内容（保留目录本身），用于"清空全部"按钮。 */
-    private void clearUploadsRoot() {
+    private void clearUploadsRoot(AssistantProvider provider) {
         try {
+            ProviderProfile profile = ProviderProfile.forProvider(provider);
             ProcessBuilder pb = new ProcessBuilder(PROOT_D, "login", "ubuntu",
-                "--user", "claude", "--", "sh", "-c",
+                "--user", profile.user, "--", "sh", "-c",
                 "rm -rf ~/uploads/* ~/uploads/.[!.]*");
             setupEnv(pb.environment(), "", "");
             pb.start().waitFor();
@@ -1365,7 +1531,7 @@ public class HomeFragment extends Fragment {
     }
 
     /** 按 UUID 目录批量删除上传文件（rm -rf ~/uploads/&lt;uuid&gt;）。 */
-    private void deleteUbuntuUploadDirs(List<String> uuids) {
+    private void deleteUbuntuUploadDirs(AssistantProvider provider, List<String> uuids) {
         if (uuids.isEmpty()) return;
         StringBuilder sb = new StringBuilder("rm -rf");
         for (String u : uuids) {
@@ -1374,8 +1540,9 @@ public class HomeFragment extends Fragment {
             if (!safe.isEmpty()) sb.append(" ~/uploads/").append(safe);
         }
         try {
+            ProviderProfile profile = ProviderProfile.forProvider(provider);
             ProcessBuilder pb = new ProcessBuilder(PROOT_D, "login", "ubuntu",
-                "--user", "claude", "--", "sh", "-c", sb.toString());
+                "--user", profile.user, "--", "sh", "-c", sb.toString());
             setupEnv(pb.environment(), "", "");
             pb.start().waitFor();
         } catch (Exception ignored) {}
@@ -1393,7 +1560,8 @@ public class HomeFragment extends Fragment {
             File[] files = dir.listFiles((f, name) -> name.endsWith(".jsonl"));
             if (files == null || files.length == 0) return;
             java.util.Set<String> validIds = new java.util.HashSet<>();
-            for (SessionStore.Entry e : mSessionStore.loadAll()) validIds.add(e.id);
+            SessionStore claudeStore = new SessionStore(requireContext(), AssistantProvider.CLAUDE);
+            for (SessionStore.Entry e : claudeStore.loadAll()) validIds.add(e.id);
             for (File f : files) {
                 String name = f.getName();
                 String id   = name.substring(0, name.length() - ".jsonl".length());
@@ -1426,9 +1594,10 @@ public class HomeFragment extends Fragment {
             .setTitle("清空全部上传文件？")
             .setMessage("将删除 Ubuntu ~/uploads/ 内所有文件，无法恢复。")
             .setPositiveButton("清空", (d, w) -> {
+                final AssistantProvider provider = mProvider;
                 mUploadStore.clearAll();
                 // 不按 uuid 逐个删，直接清空整个 uploads 目录（兼容 orphan dirs）
-                new Thread(() -> clearUploadsRoot()).start();
+                new Thread(() -> clearUploadsRoot(provider)).start();
                 mUploadItems.clear();
                 mUploadAdapter.notifyDataSetChanged();
                 mUploadEmptyHint.setVisibility(View.VISIBLE);
@@ -1463,7 +1632,8 @@ public class HomeFragment extends Fragment {
 
     /** 读取 pipe 文件自上次 offset 以来的新行，逐行解析。 */
     private void processNewPipeLines() {
-        File f = new File(AGENT_PIPE_FILE);
+        AssistantProvider pipeProvider = mProvider;
+        File f = new File(agentPipeFilePath(pipeProvider));
         if (!f.exists()) return;
         // pipe 被外部截断（AgentServer 重连）→ 重置 offset 从头读
         if (f.length() < mAgentPipeOffset) {
@@ -1494,7 +1664,7 @@ public class HomeFragment extends Fragment {
         } catch (Exception ignored) {}
         if (mAgentPipeOffset != start && getContext() != null) {
             getContext()
-                .getSharedPreferences(PREF_AGENT_PIPE, Context.MODE_PRIVATE)
+                .getSharedPreferences(agentPipePrefsName(pipeProvider), Context.MODE_PRIVATE)
                 .edit()
                 .putLong(KEY_AGENT_PIPE_OFFSET, mAgentPipeOffset)
                 .apply();
@@ -1731,9 +1901,17 @@ public class HomeFragment extends Fragment {
 
     private void loadMemoryFiles() {
         new Thread(() -> {
-            File dir = new File(MEMORY_DIR);
             List<DrawerFileAdapter.FileItem> items = new ArrayList<>();
-            if (dir.isDirectory()) {
+            ProviderProfile profile = ProviderProfile.forProvider(mProvider);
+            if (mProvider == AssistantProvider.CODEX) {
+                File agents = new File(hostPathForProviderPath(profile.instructionsFile));
+                if (agents.isFile()) {
+                    items.add(new DrawerFileAdapter.FileItem(
+                        "AGENTS.md", readFirstMeaningfulLine(agents), agents.getAbsolutePath()));
+                }
+            } else {
+                File dir = new File(hostPathForProviderPath(profile.memoryDir));
+                if (dir.isDirectory()) {
                 File[] files = dir.listFiles(f -> f.isFile() && f.getName().endsWith(".md"));
                 if (files != null) {
                     for (File f : files) {
@@ -1741,6 +1919,7 @@ public class HomeFragment extends Fragment {
                         String preview = readPreview(f);
                         items.add(new DrawerFileAdapter.FileItem(name, preview, f.getAbsolutePath()));
                     }
+                }
                 }
             }
             mHandler.post(() -> {
@@ -1762,15 +1941,20 @@ public class HomeFragment extends Fragment {
 
     private void loadSkillsFiles() {
         new Thread(() -> {
-            File dir = new File(SKILLS_DIR);
+            File dir = new File(hostPathForProviderPath(
+                ProviderProfile.forProvider(mProvider).commandsDir));
             List<DrawerFileAdapter.FileItem> items = new ArrayList<>();
             if (dir.isDirectory()) {
-                File[] files = dir.listFiles(f -> f.isFile() && f.getName().endsWith(".md"));
-                if (files != null) {
-                    for (File f : files) {
-                        String name    = f.getName().replaceAll("\\.md$", "");
-                        String preview = readFirstMeaningfulLine(f);
-                        items.add(new DrawerFileAdapter.FileItem(name, preview, f.getAbsolutePath()));
+                if (mProvider == AssistantProvider.CODEX) {
+                    collectCodexSkills(dir, "", items, 2);
+                } else {
+                    File[] files = dir.listFiles(f -> f.isFile() && f.getName().endsWith(".md"));
+                    if (files != null) {
+                        for (File f : files) {
+                            String name    = f.getName().replaceAll("\\.md$", "");
+                            String preview = readFirstMeaningfulLine(f);
+                            items.add(new DrawerFileAdapter.FileItem(name, preview, f.getAbsolutePath()));
+                        }
                     }
                 }
             }
@@ -1823,10 +2007,19 @@ public class HomeFragment extends Fragment {
     private void saveSkill(String name, String content) {
         new Thread(() -> {
             try {
-                File dir  = new File(SKILLS_DIR);
+                File dir  = new File(hostPathForProviderPath(
+                    ProviderProfile.forProvider(mProvider).commandsDir));
                 //noinspection ResultOfMethodCallIgnored
                 dir.mkdirs();
-                File file = new File(dir, name + ".md");
+                File file;
+                if (mProvider == AssistantProvider.CODEX) {
+                    File skillDir = new File(dir, safeFileName(name));
+                    //noinspection ResultOfMethodCallIgnored
+                    skillDir.mkdirs();
+                    file = new File(skillDir, "SKILL.md");
+                } else {
+                    file = new File(dir, safeFileName(name) + ".md");
+                }
                 java.nio.file.Files.write(file.toPath(), content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 mHandler.post(() -> {
                     Toast.makeText(getContext(), "技能已保存", Toast.LENGTH_SHORT).show();
@@ -1901,7 +2094,7 @@ public class HomeFragment extends Fragment {
             .setMessage("此操作不可恢复")
             .setPositiveButton("删除", (d, w) -> {
                 new Thread(() -> {
-                    boolean ok = new File(item.fullPath).delete();
+                    boolean ok = deleteDrawerItemPath(item);
                     mHandler.post(() -> {
                         if (ok) {
                             list.remove(item);
@@ -1916,6 +2109,67 @@ public class HomeFragment extends Fragment {
             })
             .setNegativeButton("取消", null)
             .show();
+    }
+
+    private boolean deleteDrawerItemPath(DrawerFileAdapter.FileItem item) {
+        if (item == null || item.fullPath == null) return false;
+        File file = new File(item.fullPath);
+        if (mProvider == AssistantProvider.CODEX && "SKILL.md".equals(file.getName())
+                && file.getParentFile() != null) {
+            return deleteRecursively(file.getParentFile());
+        }
+        return file.delete();
+    }
+
+    private void collectCodexSkills(
+            File dir,
+            String prefix,
+            List<DrawerFileAdapter.FileItem> out,
+            int depthRemaining) {
+        if (dir == null || out == null || depthRemaining < 0 || !dir.isDirectory()) return;
+        File[] children = dir.listFiles(File::isDirectory);
+        if (children == null) return;
+        for (File child : children) {
+            if (child.getName().startsWith(".")) continue;
+            String name = prefix.isEmpty() ? child.getName() : prefix + "/" + child.getName();
+            File skillFile = new File(child, "SKILL.md");
+            if (skillFile.isFile()) {
+                out.add(new DrawerFileAdapter.FileItem(
+                    name,
+                    readFirstMeaningfulLine(skillFile),
+                    skillFile.getAbsolutePath()));
+            }
+            collectCodexSkills(child, name, out, depthRemaining - 1);
+        }
+    }
+
+    private static boolean deleteRecursively(File file) {
+        if (file == null || !file.exists()) return true;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    if (!deleteRecursively(child)) return false;
+                }
+            }
+        }
+        return file.delete();
+    }
+
+    private static String safeFileName(String value) {
+        String safe = (value == null ? "" : value.trim()).replaceAll("[^a-zA-Z0-9_.-]", "-");
+        return safe.isEmpty() ? "skill" : safe;
+    }
+
+    private static String hostPathForProviderPath(String path) {
+        if (path == null) return "";
+        if (path.startsWith("/home/claude")) {
+            return UBUNTU_CLAUDE_HOME + path.substring("/home/claude".length());
+        }
+        if (path.startsWith("/home/codex")) {
+            return UBUNTU_CODEX_HOME + path.substring("/home/codex".length());
+        }
+        return path;
     }
 
     /** 读取文件前 120 字符作为预览（跳过 YAML frontmatter 横线）。 */
@@ -2017,6 +2271,9 @@ public class HomeFragment extends Fragment {
                     updateStatus("● 就绪", 0xFF2E7D32);
                     FloatingStatusService.updateStatus("● 就绪", 0xFF2E7D32, "", false);
                     ChatMessage last = getLastAssistantMessageInCurrentTurn();
+                    if (!isError) {
+                        persistCodexConversation();
+                    }
                     if (last != null && last.content != null && !last.content.isEmpty()) {
                         appendChatLog("Codex", last.content);
                     }
@@ -2076,6 +2333,8 @@ public class HomeFragment extends Fragment {
                     // 捕获 session_id：首次时绑定 + commit pending uploads
                     if (sid != null && !sid.equals(mCurrentSessionId)) {
                         mCurrentSessionId = sid;
+                        mClaudeCurrentSessionId = sid;
+                        saveSessionIdForProvider(AssistantProvider.CLAUDE, sid);
                         mUploadStore.commitPending(sid);
                     }
                     // 每条 turn 都 add：SessionStore 按 id 去重，但会刷新 timestamp + preview
@@ -2112,5 +2371,20 @@ public class HomeFragment extends Fragment {
                 });
             }
         };
+    }
+
+    private void persistCodexConversation() {
+        if (mProvider != AssistantProvider.CODEX || mCurrentSessionId == null
+                || mCodexSession == null || mTranscriptStore == null || mSessionStore == null) {
+            return;
+        }
+        try {
+            mTranscriptStore.save(mCurrentSessionId, mCodexSession.snapshotTranscript());
+            mSessionStore.add(mCurrentSessionId, System.currentTimeMillis(), mLastSentText);
+            mCodexCurrentSessionId = mCurrentSessionId;
+            saveSessionIdForProvider(AssistantProvider.CODEX, mCurrentSessionId);
+            refreshSessionDrawer();
+        } catch (Exception ignored) {
+        }
     }
 }

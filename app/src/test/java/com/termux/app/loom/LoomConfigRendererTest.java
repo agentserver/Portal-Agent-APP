@@ -154,6 +154,60 @@ public class LoomConfigRendererTest {
     }
 
     @Test
+    public void managedSlaveConfigMatchesAgentServerAppShape() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX)
+            .withAgentServerUrl("https://agent.cs.ac.cn")
+            .withObserverUrl("https://loom.nj.cs.ac.cn:10062/")
+            .withWorkspaceId("workspace-123")
+            .withWorkspaceApiKey("secret-key");
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String yaml = LoomConfigRenderer.renderManagedSlaveConfig(
+            settings,
+            slave,
+            "machine-123",
+            "BeamPro");
+
+        Assert.assertTrue(yaml.contains("server:\n"));
+        Assert.assertTrue(yaml.contains("url: \"https://agent.cs.ac.cn\""));
+        Assert.assertTrue(yaml.contains("name: \"BeamPro-worker\""));
+        Assert.assertTrue(yaml.contains("credentials:\n"));
+        Assert.assertTrue(yaml.contains("sandbox_id: \"\""));
+        Assert.assertTrue(yaml.contains("tunnel_token: \"\""));
+        Assert.assertTrue(yaml.contains("proxy_token: \"\""));
+        Assert.assertTrue(yaml.contains("workspace_id: \"\""));
+        Assert.assertTrue(yaml.contains("short_id: \"\""));
+        Assert.assertTrue(yaml.contains("kind: codex"));
+        Assert.assertTrue(yaml.contains("workdir: \"/home/codex/repo\""));
+        Assert.assertTrue(yaml.contains("display_name: \"BeamPro-worker\""));
+        Assert.assertTrue(yaml.contains("description: \"来自同一台设备：BeamPro；工作目录：/home/codex/repo\""));
+        Assert.assertTrue(yaml.contains("- \"agentserver-app-slave\""));
+        Assert.assertTrue(yaml.contains("- \"local-machine:machine-123\""));
+        Assert.assertTrue(yaml.contains("- \"host:BeamPro\""));
+        Assert.assertTrue(yaml.contains("observer:\n"));
+        Assert.assertTrue(yaml.contains("enabled: true"));
+        Assert.assertTrue(yaml.contains("url: \"https://loom.nj.cs.ac.cn:10062/\""));
+        Assert.assertTrue(yaml.contains("workspace_id: \"workspace-123\""));
+        Assert.assertTrue(yaml.contains("agent_id: \"BeamPro-worker\""));
+        Assert.assertTrue(yaml.contains("api_key: \"secret-key\""));
+        Assert.assertTrue(yaml.contains("token_state_path: \"/home/codex/.loom/slaves/slave-id/observer.token\""));
+    }
+
+    @Test
     public void codexSlaveConfigContainsCodexBackendAndPaths() {
         LoomSettings settings = LoomSettings.defaults()
             .withAgentProvider(AssistantProvider.CODEX)

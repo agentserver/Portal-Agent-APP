@@ -25,7 +25,8 @@ import java.util.Map;
  */
 public class UploadStore {
 
-    private static final String PREFS = "upload_index";
+    private static final String PREFS_CLAUDE = "upload_index";
+    private static final String PREFS_CODEX  = "upload_index_codex";
     private static final String KEY   = "data";
     static final String PENDING = "__pending__";
 
@@ -42,7 +43,16 @@ public class UploadStore {
     private final SharedPreferences mPrefs;
 
     public UploadStore(Context ctx) {
-        mPrefs = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        this(ctx, AssistantProvider.CLAUDE);
+    }
+
+    public UploadStore(Context ctx, AssistantProvider provider) {
+        mPrefs = ctx.getApplicationContext()
+            .getSharedPreferences(prefsNameForProvider(provider), Context.MODE_PRIVATE);
+    }
+
+    public static String prefsNameForProvider(AssistantProvider provider) {
+        return provider == AssistantProvider.CODEX ? PREFS_CODEX : PREFS_CLAUDE;
     }
 
     /** 写入指定 session 桶（sessionId 可以是 PENDING）。 */

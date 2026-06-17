@@ -216,6 +216,31 @@ public class CodexExecSessionTest {
     }
 
     @Test
+    public void transcriptSnapshotRetainsCodexThinkingAndToolBubbles() {
+        CodexExecSession session = new CodexExecSession(null);
+        int generation = session.startRunForTest();
+
+        session.recordThinkingForTest(generation, "I should inspect the UI.");
+        session.recordToolUseForTest(generation, "android.get_status", "{}");
+        session.recordToolResultForTest(generation, "android.get_status", "ok", "{\"ok\":true}");
+        session.streamAssistantForTest(generation, "done", null, true);
+        session.finishRunForTest(generation);
+
+        List<ChatMessage> snapshot = session.snapshotTranscript();
+
+        Assert.assertEquals(4, snapshot.size());
+        Assert.assertEquals(ChatMessage.Type.ASSISTANT, snapshot.get(0).type);
+        Assert.assertEquals("I should inspect the UI.", snapshot.get(0).thinking);
+        Assert.assertTrue(snapshot.get(0).thinkingCollapsed);
+        Assert.assertEquals(ChatMessage.Type.TOOL_USE, snapshot.get(1).type);
+        Assert.assertEquals("android.get_status", snapshot.get(1).toolName);
+        Assert.assertEquals(ChatMessage.Type.TOOL_RESULT, snapshot.get(2).type);
+        Assert.assertEquals("ok", snapshot.get(2).content.substring(snapshot.get(2).content.indexOf(": ") + 2));
+        Assert.assertEquals(ChatMessage.Type.ASSISTANT, snapshot.get(3).type);
+        Assert.assertEquals("done", snapshot.get(3).content);
+    }
+
+    @Test
     public void interruptInvalidatesStaleWorkerResults() {
         CodexExecSession session = new CodexExecSession(null);
         int generation = session.currentGenerationForTest();

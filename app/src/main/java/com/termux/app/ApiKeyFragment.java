@@ -82,9 +82,14 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
 
         // 添加按钮
         MaterialButton btnAdd = view.findViewById(R.id.btn_add_key);
+        styleOutlinedButton(btnAdd, R.color.app_accent);
         btnAdd.setOnClickListener(v -> showAddDialog());
-        view.findViewById(R.id.btn_apply_provider_config).setOnClickListener(v -> applyProviderConfig());
-        view.findViewById(R.id.btn_edit_raw_provider_config).setOnClickListener(v -> showRawConfigDialog());
+        MaterialButton apply = view.findViewById(R.id.btn_apply_provider_config);
+        MaterialButton raw = view.findViewById(R.id.btn_edit_raw_provider_config);
+        styleOutlinedButton(apply, R.color.app_accent);
+        styleOutlinedButton(raw, R.color.app_primary);
+        apply.setOnClickListener(v -> applyProviderConfig());
+        raw.setOnClickListener(v -> showRawConfigDialog());
         updateConfigPanel();
     }
 
@@ -291,12 +296,25 @@ public class ApiKeyFragment extends Fragment implements ApiKeyAdapter.Listener {
 
         button.setBackgroundTintList(ColorStateList.valueOf(background));
         button.setStrokeColor(ColorStateList.valueOf(blue));
+        button.setStrokeWidth(dp(1));
         button.setTextColor(text);
+        button.setAllCaps(false);
     }
 
     private void updateCount() {
         int n = mEntries.size();
         mCountText.setText(n + " 个");
+    }
+
+    private void styleOutlinedButton(MaterialButton button, int colorRes) {
+        if (button == null || getContext() == null) return;
+        int color = ContextCompat.getColor(requireContext(), colorRes);
+        int white = ContextCompat.getColor(requireContext(), R.color.app_card_bg);
+        button.setBackgroundTintList(ColorStateList.valueOf(white));
+        button.setStrokeColor(ColorStateList.valueOf(color));
+        button.setStrokeWidth(dp(1));
+        button.setTextColor(color);
+        button.setAllCaps(false);
     }
 
     private int indexOf(String id) {

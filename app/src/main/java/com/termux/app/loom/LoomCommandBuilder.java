@@ -54,7 +54,11 @@ public final class LoomCommandBuilder {
     public static String startObserverScript(String prefix, LoomSettings settings) {
         Paths p = paths(settings);
         String observerLog = logPath(prefix, "loom-observer.log");
+        String observerProcess = observerProcess(p);
         String command = ""
+            + loomPidsFunction()
+            + "pids=$(loom_pids '" + observerProcess + "')\n"
+            + "if [ -n \"$pids\" ]; then echo 'observer: already running'; exit 0; fi\n"
             + "cd " + p.observerHome + "\n"
             + "exec observer-server --config " + p.observerConfig;
 
@@ -193,6 +197,148 @@ public final class LoomCommandBuilder {
             + "echo '[*] Run driver binding from Loom page if config.yaml has empty credentials.'\n";
     }
 
+    public static String setupManagedSlaveConfigScript(
+            LoomSettings settings,
+            LoomSlave slave,
+            String machineId,
+            String computerName) {
+        LoomSettings safeSettings = settings == null ? LoomSettings.defaults() : settings;
+        LoomSlave safeSlave = requireSlave(slave);
+        Paths p = paths(safeSettings);
+        String config = b64(LoomConfigRenderer.renderManagedSlaveConfig(
+            safeSettings,
+            safeSlave,
+            machineId,
+            computerName));
+        String configDir = parentDir(safeSlave.configPath);
+        String logDir = parentDir(safeSlave.logPath);
+        String command = ""
+            + "mkdir -p " + shellQuote(configDir) + " " + shellQuote(logDir) + "\n"
+            + slaveConfigIdentityFunctions()
+            + "_slave_cfg=" + shellQuote(safeSlave.configPath) + "\n"
+            + "_slave_tmp=" + shellQuote(safeSlave.configPath + ".tmp.android") + "\n"
+            + "printf '%s' '" + config + "' | base64 -d > \"$_slave_tmp\"\n"
+            + "if [ -s \"$_slave_cfg\" ] && slave_has_identity \"$_slave_cfg\""
+                + " && slave_server_matches \"$_slave_cfg\" " + shellQuote(safeSettings.agentServerUrl) + "; then\n"
+            + "  echo '[*] Keeping registered Slave config'\n"
+            + "  rm -f \"$_slave_tmp\"\n"
+            + "else\n"
+            + "  mv \"$_slave_tmp\" \"$_slave_cfg\"\n"
+            + "fi\n"
+            + "chmod 600 \"$_slave_cfg\"\n";
+
+        return header()
+            + "command -v proot-distro\n"
+            + proot(command, p.user) + "\n";
+    }
+
+    public static String startManagedSlaveRuntimeScript(
+        String prefix,
+        LoomSettings settings,
+        LoomSlave slave,
+        String machineId,
+        String computerName) {
+        LoomSettings safeSettings = settings == null ? LoomSettings.defaults() : settings;
+        LoomSlave safeSlave = requireSlave(slave);
+        return setupConfigScript(safeSettings)
+            + "\n" + setupManagedSlaveConfigScript(safeSettings, safeSlave, machineId, computerName)
+            + "\n" + startObserverScript(prefix, safeSettings)
+            + "\n" + waitForObserverScript(safeSettings)
+            + "\n" + startManagedSlaveScript(prefix, safeSettings, safeSlave);
+    }
+
+    public static String startManagedSlaveScript(String prefix, LoomSettings settings, LoomSlave slave) {
+        LoomSettings safeSettings = settings == null ? LoomSettings.defaults() : settings;
+        LoomSlave safeSlave = requireSlave(slave);
+        Paths p = paths(safeSettings);
+        String process = managedSlaveProcess(safeSlave);
+        String findPidCommand = ""
+            + loomPidsFunction()
+            + "loom_pids '" + process + "' | head -n 1\n";
+        String clearLogCommand = ""
+            + "mkdir -p " + shellQuote(parentDir(safeSlave.logPath)) + "\n"
+            + ": > " + shellQuote(safeSlave.logPath) + "\n";
+        String launchCommand = ""
+            + "exec slave-agent " + safeSlave.configPath + " >> " + shellQuote(safeSlave.logPath) + " 2>&1\n";
+        String identityCommand = ""
+            + slaveConfigIdentityFunctions()
+            + "slave_has_identity " + shellQuote(safeSlave.configPath) + "\n";
+        String authUrlCommand = ""
+            + "grep -Eo 'https?://[^[:space:]]*(device|user[_-]code|verification)[^[:space:]]*' "
+                + shellQuote(safeSlave.logPath) + " 2>/dev/null | tail -n 1 || true\n";
+        String tailErrorCommand = ""
+            + "tail -n 8 " + shellQuote(safeSlave.logPath)
+                + " 2>/dev/null | tr '\\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g' || true\n";
+        String script = ""
+            + "auth_emitted=0\n"
+            + "pids=$(" + proot(findPidCommand, p.user) + " 2>/dev/null || true)\n"
+            + "if [ -n \"$pids\" ]; then\n"
+            + "  pid=$(echo \"$pids\" | head -n 1)\n"
+            + "else\n"
+            + "  " + proot(clearLogCommand, p.user) + "\n"
+            + "  nohup " + proot(launchCommand, p.user) + " >/dev/null 2>&1 &\n"
+            + "  pid=$!\n"
+            + "fi\n"
+            + "echo \"__LOOM_SLAVE_PID__=$pid\"\n"
+            + "for i in $(seq 1 300); do\n"
+            + "  if ! kill -0 \"$pid\" 2>/dev/null; then\n"
+            + "    err=$(" + proot(tailErrorCommand, p.user) + " 2>/dev/null || true)\n"
+            + "    [ -n \"$err\" ] || err='slave-agent 启动后立即退出'\n"
+            + "    echo \"__LOOM_SLAVE_ERROR__=$err\"\n"
+            + "    exit 1\n"
+            + "  fi\n"
+            + "  if " + proot(identityCommand, p.user) + " >/dev/null 2>&1; then\n"
+            + "    sleep 2\n"
+            + "    if kill -0 \"$pid\" 2>/dev/null; then echo '__LOOM_SLAVE_READY__=1'; exit 0; fi\n"
+            + "    err=$(" + proot(tailErrorCommand, p.user) + " 2>/dev/null || true)\n"
+            + "    [ -n \"$err\" ] || err='slave-agent 认证完成后退出'\n"
+            + "    echo \"__LOOM_SLAVE_ERROR__=$err\"\n"
+            + "    exit 1\n"
+            + "  fi\n"
+            + "  url=$(" + proot(authUrlCommand, p.user) + " 2>/dev/null || true)\n"
+            + "  if [ -n \"$url\" ] && [ \"$auth_emitted\" = 0 ]; then echo \"__LOOM_SLAVE_AUTH_URL__=$url\"; auth_emitted=1; fi\n"
+            + "  sleep 1\n"
+            + "done\n"
+            + "if [ \"$auth_emitted\" = 1 ]; then echo '__LOOM_SLAVE_STATUS__=auth_required'; exit 0; fi\n"
+            + "echo '__LOOM_SLAVE_ERROR__=启动超时，未收到认证链接或身份信息'\n"
+            + "exit 1\n";
+
+        return header()
+            + "command -v proot-distro\n"
+            + readableCommand("nohup slave-agent " + baseName(safeSlave.configPath))
+            + script;
+    }
+
+    public static String stopManagedSlaveScript(LoomSettings settings, LoomSlave slave) {
+        LoomSettings safeSettings = settings == null ? LoomSettings.defaults() : settings;
+        LoomSlave safeSlave = requireSlave(slave);
+        Paths p = paths(safeSettings);
+        String command = stopCommand(managedSlaveProcess(safeSlave), "slave");
+        return header()
+            + "command -v proot-distro\n"
+            + readableCommand("pkill -f '" + managedSlaveProcess(safeSlave) + "'")
+            + proot(command, p.user) + "\n";
+    }
+
+    private static String waitForObserverScript(LoomSettings settings) {
+        LoomSettings safeSettings = settings == null ? LoomSettings.defaults() : settings;
+        Paths p = paths(safeSettings);
+        String command = ""
+            + "_obs_addr=" + shellQuote(safeSettings.observerListenAddr) + "\n"
+            + "_obs_host=${_obs_addr%:*}\n"
+            + "_obs_port=${_obs_addr##*:}\n"
+            + "[ \"$_obs_host\" = \"0.0.0.0\" ] && _obs_host=127.0.0.1\n"
+            + "for i in $(seq 1 15); do\n"
+            + "  if (echo > /dev/tcp/$_obs_host/$_obs_port) >/dev/null 2>&1; then echo 'observer: ready'; exit 0; fi\n"
+            + "  sleep 1\n"
+            + "done\n"
+            + "echo 'observer: wait timeout'\n"
+            + "exit 1\n";
+        return header()
+            + "command -v proot-distro\n"
+            + proot(command, p.user) + "\n";
+    }
+
     public static String startSlaveScript(String prefix) {
         return startSlaveScript(prefix, LoomSettings.defaults());
     }
@@ -326,6 +472,22 @@ public final class LoomCommandBuilder {
             + "}\n";
     }
 
+    private static String slaveConfigIdentityFunctions() {
+        return ""
+            + "slave_has_identity() {\n"
+            + "  grep -Eq '^[[:space:]]+sandbox_id:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
+                + " && grep -Eq '^[[:space:]]+tunnel_token:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
+                + " && grep -Eq '^[[:space:]]+proxy_token:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
+                + " && grep -Eq '^[[:space:]]+workspace_id:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
+                + " && grep -Eq '^[[:space:]]+short_id:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null\n"
+            + "}\n"
+            + "slave_server_matches() {\n"
+            + "  _expected=\"$2\"\n"
+            + "  [ -z \"$_expected\" ] && return 0\n"
+            + "  grep -F \"  url: \\\"$_expected\\\"\" \"$1\" >/dev/null 2>&1 || grep -F \"  url: $_expected\" \"$1\" >/dev/null 2>&1\n"
+            + "}\n";
+    }
+
     private static String b64(String value) {
         return java.util.Base64.getEncoder().encodeToString(
             value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -348,8 +510,29 @@ public final class LoomCommandBuilder {
         return "slave-agent " + regexPath(p.slaveConfig);
     }
 
+    private static String managedSlaveProcess(LoomSlave slave) {
+        return "slave-agent " + regexPath(slave.configPath);
+    }
+
     private static String regexPath(String value) {
         return value.replace(".", "\\.");
+    }
+
+    private static String parentDir(String path) {
+        int slash = path == null ? -1 : path.lastIndexOf('/');
+        return slash > 0 ? path.substring(0, slash) : ".";
+    }
+
+    private static String baseName(String path) {
+        int slash = path == null ? -1 : path.lastIndexOf('/');
+        return slash >= 0 ? path.substring(slash + 1) : path;
+    }
+
+    private static LoomSlave requireSlave(LoomSlave slave) {
+        if (slave == null || slave.configPath.isEmpty() || slave.logPath.isEmpty()) {
+            throw new IllegalArgumentException("slave config and log paths required");
+        }
+        return slave;
     }
 
     private static final class Paths {

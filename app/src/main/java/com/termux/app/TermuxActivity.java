@@ -670,7 +670,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             return true;
         }
 
-        if (isFragmentVisible("automation_settings")) {
+        if (isFragmentVisible("automation_settings")
+                || isFragmentVisible("workspace_access_settings")) {
             navigateBackToSettingsHub();
             return true;
         }
@@ -1030,7 +1031,6 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
             int id = item.getItemId();
             if (id == R.id.nav_home) {
                 showHomeMode();
-                syncChatLogToHome();   // 把日志里的新内容补充到 Chat UI
                 return true;
             } else if (id == R.id.nav_collaboration) {
                 showCollaborationMode();
@@ -1115,6 +1115,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF   = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF   = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (homeF == null) {
             ft.add(R.id.home_fragment_container, new HomeFragment(), "home");
@@ -1127,6 +1128,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (loomF     != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF     != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF   != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1155,6 +1157,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (collaborationF == null) {
             ft.add(R.id.home_fragment_container, new CollaborationFragment(), "collaboration");
@@ -1167,6 +1170,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (loomF != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1196,6 +1200,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF  = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         if (apiF == null) {
             ft.add(R.id.home_fragment_container, new ApiKeyFragment(), "apikey");
         } else {
@@ -1235,6 +1240,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF  = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (agentF == null) {
             ft.add(R.id.home_fragment_container, new AgentServerFragment(), "agentserver");
@@ -1247,6 +1253,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (loomF     != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF     != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF   != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1275,6 +1282,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF  = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (loomF == null) {
             ft.add(R.id.home_fragment_container, new LoomFragment(), "loom");
@@ -1287,6 +1295,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (agentF    != null) ft.hide(agentF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF     != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF   != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1315,6 +1324,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF    = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF    = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF  = fm.findFragmentByTag("agent_task_detail");
         if (settingsF == null) {
             ft.add(R.id.home_fragment_container, new SettingsHubFragment(), "settings_hub");
@@ -1327,6 +1337,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (agentF  != null) ft.hide(agentF);
         if (loomF   != null) ft.hide(loomF);
         if (autoF   != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF != null) ft.remove(detailF);
         ft.commit();
     }
@@ -1345,6 +1356,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF     = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF     = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         if (autoF == null) {
             ft.add(R.id.home_fragment_container, new AutomationSettingsFragment(), "automation_settings");
         } else {
@@ -1356,11 +1368,50 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (agentF    != null) ft.hide(agentF);
         if (loomF     != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
+        if (workspaceF != null) ft.hide(workspaceF);
+        ft.commit();
+    }
+
+    /** 切换到工作目录限制设置页面。 */
+    public void showWorkspaceAccessSettingsMode() {
+        View container = findViewById(R.id.home_fragment_container);
+        if (container == null) return;
+
+        androidx.fragment.app.FragmentManager fm = getSupportFragmentManager();
+        androidx.fragment.app.FragmentTransaction ft = fm.beginTransaction();
+        androidx.fragment.app.Fragment homeF     = fm.findFragmentByTag("home");
+        androidx.fragment.app.Fragment collaborationF = fm.findFragmentByTag("collaboration");
+        androidx.fragment.app.Fragment apiF      = fm.findFragmentByTag("apikey");
+        androidx.fragment.app.Fragment agentF    = fm.findFragmentByTag("agentserver");
+        androidx.fragment.app.Fragment loomF     = fm.findFragmentByTag("loom");
+        androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
+        androidx.fragment.app.Fragment autoF     = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
+        androidx.fragment.app.Fragment detailF   = fm.findFragmentByTag("agent_task_detail");
+        if (workspaceF == null) {
+            ft.add(R.id.home_fragment_container,
+                new WorkspaceAccessSettingsFragment(), "workspace_access_settings");
+        } else {
+            ft.show(workspaceF);
+        }
+        if (homeF     != null) ft.hide(homeF);
+        if (collaborationF != null) ft.hide(collaborationF);
+        if (apiF      != null) ft.hide(apiF);
+        if (agentF    != null) ft.hide(agentF);
+        if (loomF     != null) ft.hide(loomF);
+        if (settingsF != null) ft.hide(settingsF);
+        if (autoF     != null) ft.hide(autoF);
+        if (detailF   != null) ft.remove(detailF);
         ft.commit();
     }
 
     /** 切换到 AgentServer 任务详情页（按 task id 加载），通常从 HomeFragment 任务列表点击进入。 */
     public void showAgentTaskDetailMode(String taskId) {
+        showAgentTaskDetailMode(AssistantProvider.CLAUDE, taskId);
+    }
+
+    /** 切换到当前助手的 AgentServer 任务详情页（按 task id 加载）。 */
+    public void showAgentTaskDetailMode(AssistantProvider provider, String taskId) {
         DrawerLayout drawer = getDrawer();
         ViewPager toolbar = getTerminalToolbarViewPager();
         View container = findViewById(R.id.home_fragment_container);
@@ -1383,6 +1434,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF   = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF   = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (homeF   != null) ft.hide(homeF);
         if (collaborationF != null) ft.hide(collaborationF);
@@ -1391,9 +1443,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (loomF   != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF   != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF != null) ft.remove(detailF);
         ft.add(R.id.home_fragment_container,
-            AgentTaskDetailFragment.newInstance(taskId), "agent_task_detail");
+            AgentTaskDetailFragment.newInstance(provider, taskId), "agent_task_detail");
         ft.commit();
     }
 
@@ -1416,6 +1469,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         androidx.fragment.app.Fragment loomF  = fm.findFragmentByTag("loom");
         androidx.fragment.app.Fragment settingsF = fm.findFragmentByTag("settings_hub");
         androidx.fragment.app.Fragment autoF  = fm.findFragmentByTag("automation_settings");
+        androidx.fragment.app.Fragment workspaceF = fm.findFragmentByTag("workspace_access_settings");
         androidx.fragment.app.Fragment detailF = fm.findFragmentByTag("agent_task_detail");
         if (homeF  != null) ft.hide(homeF);
         if (collaborationF != null) ft.hide(collaborationF);
@@ -1424,6 +1478,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (loomF  != null) ft.hide(loomF);
         if (settingsF != null) ft.hide(settingsF);
         if (autoF  != null) ft.hide(autoF);
+        if (workspaceF != null) ft.hide(workspaceF);
         if (detailF != null) ft.remove(detailF);
         ft.commit();
 
@@ -1432,65 +1487,6 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (toolbar != null && mPreferences != null && mPreferences.shouldShowTerminalToolbar()) {
             toolbar.setVisibility(View.VISIBLE);
         }
-    }
-
-    /**
-     * 切换回主页 Tab 时，解析日志文件并把尚未显示的条目通过 HomeFragment.syncFromLog() 补充进去。
-     * 日志格式：每条 "[HH:mm:ss] 角色\n内容\n\n"。
-     */
-    private void syncChatLogToHome() {
-        androidx.fragment.app.Fragment f = getSupportFragmentManager().findFragmentByTag("home");
-        if (!(f instanceof HomeFragment)) return;
-        HomeFragment home = (HomeFragment) f;
-
-        new Thread(() -> {
-            try {
-                String logPath = com.termux.shared.termux.TermuxConstants.TERMUX_HOME_DIR_PATH
-                        + "/chat_history.log";
-                java.io.File logFile = new java.io.File(logPath);
-                if (!logFile.exists()) return;
-
-                String content = new String(java.nio.file.Files.readAllBytes(logFile.toPath()),
-                        java.nio.charset.StandardCharsets.UTF_8);
-
-                // 按时间戳头 "[HH:mm:ss] Role" 分段，不再用 \n\n 切割。
-                // 原来的 split("\n\n") 会把含空行的 Claude 回复切碎，导致后续段落
-                // 因没有头信息而被当成 SYSTEM 消息显示在灰色区域。
-                java.util.List<String[]> entries = new java.util.ArrayList<>();
-                java.util.regex.Pattern headerPat =
-                    java.util.regex.Pattern.compile("^\\[\\d{2}:\\d{2}:\\d{2}\\] .+");
-                String[] lines = content.split("\n", -1);
-                String currentHeader = null;
-                StringBuilder currentBody = new StringBuilder();
-                for (String line : lines) {
-                    if (headerPat.matcher(line).matches()) {
-                        if (currentHeader != null) {
-                            String body = currentBody.toString().trim();
-                            if (!body.isEmpty()) entries.add(new String[]{currentHeader, body});
-                        }
-                        currentHeader = line;
-                        currentBody.setLength(0);
-                    } else {
-                        if (currentHeader != null) {
-                            if (currentBody.length() > 0) currentBody.append('\n');
-                            currentBody.append(line);
-                        }
-                    }
-                }
-                if (currentHeader != null) {
-                    String body = currentBody.toString().trim();
-                    if (!body.isEmpty()) entries.add(new String[]{currentHeader, body});
-                }
-
-                if (!entries.isEmpty()) {
-                    final java.util.List<String[]> finalEntries = entries;
-                    runOnUiThread(() -> {
-                        home.syncFromLog(finalEntries);
-                        home.scrollToBottom();
-                    });
-                }
-            } catch (Exception ignored) {}
-        }, "SyncChatLog").start();
     }
 
     // ── HomeFragment 调用的公共方法 ──────────────────────────────────────────

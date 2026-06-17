@@ -30,6 +30,16 @@ public class LoomCommandBuilderTest {
     }
 
     @Test
+    public void startObserverSkipsWhenAlreadyRunning() {
+        String script = LoomCommandBuilder.startObserverScript("/data/data/com.termux/files/usr");
+
+        Assert.assertTrue(script.contains("loom_pids()"));
+        Assert.assertTrue(script.contains("observer: already running"));
+        Assert.assertTrue(script.contains(
+            "observer-server --config /home/codex/\\.loom/observer-local/observer\\.yaml"));
+    }
+
+    @Test
     public void stopScriptsUseNarrowKillPatterns() {
         Assert.assertTrue(LoomCommandBuilder.stopObserverScript()
             .contains("pkill -f 'observer-server --config /home/codex/\\.loom/observer-local/observer\\.yaml'"));
@@ -143,6 +153,150 @@ public class LoomCommandBuilderTest {
         Assert.assertFalse(script.contains("Keeping registered Driver config"));
         Assert.assertFalse(script.contains("driver_has_identity"));
         Assert.assertTrue(script.contains("base64 -d > /home/codex/loom-driver/config.yaml"));
+    }
+
+    @Test
+    public void managedSlaveScriptsPreserveCredentialsAndEmitRuntimeMarkers() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX);
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String setup = LoomCommandBuilder.setupManagedSlaveConfigScript(
+            settings,
+            slave,
+            "machine-123",
+            "BeamPro");
+        String start = LoomCommandBuilder.startManagedSlaveScript(
+            "/data/data/com.termux/files/usr",
+            settings,
+            slave);
+        String stop = LoomCommandBuilder.stopManagedSlaveScript(settings, slave);
+
+        Assert.assertTrue(setup.contains("/home/codex/.loom/slaves/slave-id/config.yaml"));
+        Assert.assertTrue(setup.contains("Keeping registered Slave config"));
+        Assert.assertTrue(setup.contains("slave_has_identity"));
+        Assert.assertTrue(setup.contains("slave_server_matches"));
+        Assert.assertTrue(start.contains("slave-agent /home/codex/.loom/slaves/slave-id/config.yaml"));
+        Assert.assertTrue(start.contains("/home/codex/.loom/slaves/slave-id/logs/slave.log"));
+        Assert.assertTrue(start.contains("__LOOM_SLAVE_PID__="));
+        Assert.assertTrue(start.contains("__LOOM_SLAVE_AUTH_URL__="));
+        Assert.assertTrue(start.contains("__LOOM_SLAVE_READY__=1"));
+        Assert.assertTrue(start.contains("__LOOM_SLAVE_ERROR__="));
+        Assert.assertTrue(start.contains("kill -0 \"$pid\""));
+        Assert.assertTrue(start.contains("tail -n 8"));
+        Assert.assertTrue(stop.contains("slave-agent /home/codex/\\.loom/slaves/slave-id/config\\.yaml"));
+        Assert.assertTrue(stop.contains("slave: stopped"));
+    }
+
+    @Test
+    public void managedSlaveStartKeepsPollingAfterAuthUrl() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX);
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String script = LoomCommandBuilder.startManagedSlaveScript(
+            "/data/data/com.termux/files/usr",
+            settings,
+            slave);
+
+        Assert.assertTrue(script.contains("auth_emitted=0"));
+        Assert.assertTrue(script.contains("seq 1 300"));
+        Assert.assertTrue(script.contains("auth_emitted=1"));
+        Assert.assertTrue(script.contains(": > "));
+        Assert.assertTrue(script.contains("/home/codex/.loom/slaves/slave-id/logs/slave.log"));
+        Assert.assertFalse(script.contains("echo \"__LOOM_SLAVE_AUTH_URL__=$url\"; exit 0"));
+    }
+
+    @Test
+    public void managedSlaveStartUsesOuterProotNohupForPersistentRuntime() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX);
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String script = LoomCommandBuilder.startManagedSlaveScript(
+            "/data/data/com.termux/files/usr",
+            settings,
+            slave);
+
+        Assert.assertTrue(script.contains("nohup proot-distro login --user codex ubuntu -- bash -lc"));
+        Assert.assertTrue(script.contains("exec slave-agent /home/codex/.loom/slaves/slave-id/config.yaml"));
+        Assert.assertFalse(script.contains("nohup slave-agent /home/codex/.loom/slaves/slave-id/config.yaml"));
+    }
+
+    @Test
+    public void managedSlaveRuntimeStartsObserverBeforeSlaveAgent() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX);
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String script = LoomCommandBuilder.startManagedSlaveRuntimeScript(
+            "/data/data/com.termux/files/usr",
+            settings,
+            slave,
+            "machine-123",
+            "BeamPro");
+
+        int setupIndex = script.indexOf("/home/codex/.loom/slaves/slave-id/config.yaml");
+        int observerIndex = script.indexOf("observer-server --config /home/codex/.loom/observer-local/observer.yaml");
+        int waitIndex = script.indexOf("observer: ready");
+        int slaveIndex = script.indexOf("slave-agent /home/codex/.loom/slaves/slave-id/config.yaml");
+
+        Assert.assertTrue(setupIndex >= 0);
+        Assert.assertTrue(observerIndex > setupIndex);
+        Assert.assertTrue(waitIndex > observerIndex);
+        Assert.assertTrue(slaveIndex > waitIndex);
     }
 
     @Test

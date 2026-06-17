@@ -38,8 +38,13 @@ public class LoomDriverBindingLabelTest {
         Assert.assertNull(findById(loomDoc, "btn_loom_stop_observer"));
         Assert.assertNull(findById(loomDoc, "btn_loom_start_slave"));
         Assert.assertNull(findById(loomDoc, "btn_loom_stop_slave"));
-        Assert.assertNotNull(findById(collaborationDoc, "btn_collaboration_start_role"));
-        Assert.assertNotNull(findById(collaborationDoc, "btn_collaboration_stop_role"));
+        Assert.assertNotNull(findById(collaborationDoc, "btn_collaboration_create_slave"));
+        Assert.assertNotNull(findById(collaborationDoc, "btn_collaboration_refresh_slaves"));
+        Assert.assertNotNull(findById(collaborationDoc, "collaboration_slave_list"));
+        Assert.assertEquals("创建并启动 Slave",
+            findById(collaborationDoc, "btn_collaboration_create_slave").getAttribute("android:text"));
+        Assert.assertNull(findById(collaborationDoc, "btn_collaboration_start_role"));
+        Assert.assertNull(findById(collaborationDoc, "btn_collaboration_stop_role"));
     }
 
     @Test

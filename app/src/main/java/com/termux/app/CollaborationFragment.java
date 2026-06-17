@@ -8,11 +8,15 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -20,22 +24,25 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import com.google.android.material.button.MaterialButton;
 import com.termux.R;
 import com.termux.app.collab.CollaborationConnectionState;
 import com.termux.app.loom.LoomCommandBuilder;
 import com.termux.app.loom.LoomDriverConfigIdentity;
 import com.termux.app.loom.LoomSettings;
+import com.termux.app.loom.LoomSlave;
+import com.termux.app.loom.LoomSlaveRegistry;
+import com.termux.app.loom.LoomSlaveStatus;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * AgentServer 与 Loom 的协作控制台。
- *
- * 阶段一只做入口重组和状态摘要，具体运行时操作继续复用现有详情页。
  */
 public class CollaborationFragment extends Fragment {
 
@@ -53,29 +60,24 @@ public class CollaborationFragment extends Fragment {
     private static final String KEY_DRIVER_BINDING_SERVER_URL = "driver_binding_server_url";
     private static final String KEY_DRIVER_BINDING_DEVICE_NAME = "driver_binding_device_name";
     private static final String KEY_DRIVER_BINDING_DRIVER_NAME = "driver_binding_driver_name";
-    private static final String[] ROLE_LABELS = {
-        "Observer", "Slave"
-    };
-    private static final String[] ROLE_VALUES = {
-        "observer", "slave"
-    };
 
     private TextView mProviderText;
     private TextView mProviderSwitchButton;
     private View mDriverBindingDot;
     private TextView mDriverBindingStatus;
-    private TextView mStartRoleButton;
-    private TextView mStopRoleButton;
     private TextView mWorkspaceSummary;
     private TextView mLoomSummary;
     private TextView mAndroidCapabilitiesSummary;
     private TextView mLocalAgentStatus;
-    private TextView mLocalSlaveStatus;
+    private TextView mSlaveMachineText;
+    private TextView mEmptySlavesText;
+    private LinearLayout mSlaveList;
     private Thread mDriverBindingThread;
     private Thread mLoomRuntimeThread;
     private Process mLoomRuntimeProcess;
     private AlertDialog mAuthDialog;
     private boolean mAuthDialogShown;
+    private LoomSlaveRegistry.Machine mMachine;
 
     private static final Pattern AUTH_URL_PATTERN =
         Pattern.compile("https?://[\\w.-]+(?:/[\\w./?=&%+-]*)?");
@@ -96,25 +98,28 @@ public class CollaborationFragment extends Fragment {
         mProviderSwitchButton = view.findViewById(R.id.btn_collaboration_switch_provider);
         mDriverBindingDot = view.findViewById(R.id.collaboration_driver_binding_dot);
         mDriverBindingStatus = view.findViewById(R.id.collaboration_driver_binding_status);
-        mStartRoleButton = view.findViewById(R.id.btn_collaboration_start_role);
-        mStopRoleButton = view.findViewById(R.id.btn_collaboration_stop_role);
         mWorkspaceSummary = view.findViewById(R.id.collaboration_workspace_summary);
         mLoomSummary = view.findViewById(R.id.collaboration_loom_summary);
         mAndroidCapabilitiesSummary = view.findViewById(R.id.collaboration_android_capabilities_summary);
         mLocalAgentStatus = view.findViewById(R.id.collaboration_local_agent_status);
-        mLocalSlaveStatus = view.findViewById(R.id.collaboration_local_slave_status);
+        mSlaveMachineText = view.findViewById(R.id.collaboration_slave_machine);
+        mEmptySlavesText = view.findViewById(R.id.collaboration_empty_slaves);
+        mSlaveList = view.findViewById(R.id.collaboration_slave_list);
 
         view.findViewById(R.id.btn_collaboration_switch_provider)
             .setOnClickListener(v -> showProviderDialog());
         view.findViewById(R.id.btn_collaboration_bind_driver)
             .setOnClickListener(v -> bindDriverToCurrentAgent(
                 new ProviderSettingsStore(requireContext()).getSelectedProvider()));
-        view.findViewById(R.id.btn_collaboration_switch_role)
-            .setOnClickListener(v -> showRoleDialog());
-        view.findViewById(R.id.btn_collaboration_start_role)
-            .setOnClickListener(v -> startSelectedRole());
-        view.findViewById(R.id.btn_collaboration_stop_role)
-            .setOnClickListener(v -> stopSelectedRole());
+        view.findViewById(R.id.btn_collaboration_create_slave)
+            .setOnClickListener(v -> createManagedSlave());
+        view.findViewById(R.id.btn_collaboration_refresh_slaves)
+            .setOnClickListener(v -> refreshDashboard());
+        view.findViewById(R.id.btn_collaboration_workspace_access)
+            .setOnClickListener(v -> {
+                TermuxActivity a = act();
+                if (a != null) a.showWorkspaceAccessSettingsMode();
+            });
 
         View.OnClickListener agentServerClick = v -> {
             TermuxActivity a = act();
@@ -159,7 +164,7 @@ public class CollaborationFragment extends Fragment {
         ProviderProfile profile = ProviderProfile.forProvider(
             new ProviderSettingsStore(requireContext()).getSelectedProvider());
         if (mProviderText != null) {
-            mProviderText.setText("当前助手：" + profile.displayName);
+            mProviderText.setText("新建 Slave 默认使用：" + profile.displayName);
         }
         if (mProviderSwitchButton != null) {
             mProviderSwitchButton.setText("切换 Agent");
@@ -175,7 +180,7 @@ public class CollaborationFragment extends Fragment {
             .getSharedPreferences(AGENTSERVER_PREFS_NAME, Context.MODE_PRIVATE);
         String configuredServerUrl = trim(agentPrefs.getString(KEY_AGENTSERVER_URL, ""));
         String serverUrl = firstNonEmpty(configuredServerUrl, LoomSettings.defaults().agentServerUrl);
-        String deviceName = trim(agentPrefs.getString(KEY_AGENTSERVER_DEVICE_NAME, ""));
+        String deviceName = currentDeviceName();
         String workspaceId = currentWorkspaceId();
 
         if (mWorkspaceSummary != null) {
@@ -183,35 +188,335 @@ public class CollaborationFragment extends Fragment {
             String workspaceLine = workspaceId.isEmpty()
                 ? "工作区：绑定后自动同步"
                 : "工作区：" + shortId(workspaceId);
-            String deviceLine = "本机：" + (deviceName.isEmpty() ? "本机设备" : deviceName);
-            mWorkspaceSummary.setText(serverLine + "\n" + workspaceLine + "\n" + deviceLine);
+            mWorkspaceSummary.setText(serverLine + "\n" + workspaceLine + "\n" + "本机：" + deviceName);
         }
+
+        LoomSlaveRegistry registry = LoomSlaveRegistry.forContext(requireContext());
+        mMachine = registry.ensureMachine(deviceName);
+        registry.markStaleStarting(System.currentTimeMillis(), 60_000);
+        if (mSlaveMachineText != null) {
+            mSlaveMachineText.setText("本机：" + mMachine.computerName);
+        }
+        List<LoomSlave> slaves = registry.list();
+        dismissAuthDialogIfNoAuthRequired(slaves);
+        renderSlaveList(slaves);
 
         SharedPreferences loomPrefs = requireContext()
             .getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE);
         LoomSettings defaults = LoomSettings.defaults();
-        String role = trim(loomPrefs.getString(LoomSettings.KEY_ROLE_MODE, defaults.roleMode));
         String observerUrl = trim(loomPrefs.getString(LoomSettings.KEY_OBSERVER_URL, defaults.observerUrl));
-        updateRoleActionButtons(role);
-
         if (mLoomSummary != null) {
-            mLoomSummary.setText("Loom：" + roleLabel(role)
-                + "\nObserver：" + observerUrl
-                + "\nDriver：随 " + profile.displayName + " 配置");
+            mLoomSummary.setText("Loom 编排设置\nObserver：" + observerUrl);
         }
         if (mAndroidCapabilitiesSummary != null) {
             mAndroidCapabilitiesSummary.setText(
-                "无障碍 / 截图 / ADB / Android MCP 状态在设置与自动化页管理。");
+                "管理应用/文件目录权限");
         }
         if (mLocalAgentStatus != null) {
-            String name = deviceName.isEmpty() ? "本机 Agent" : deviceName;
-            mLocalAgentStatus.setText(name + " · " + profile.displayName);
+            mLocalAgentStatus.setText("本机 Slave · 新建默认使用 " + profile.displayName);
         }
-        if (mLocalSlaveStatus != null) {
-            if (mLoomRuntimeThread == null || !mLoomRuntimeThread.isAlive()) {
-                mLocalSlaveStatus.setText("本机身份 · " + roleLabel(role));
+    }
+
+    private void renderSlaveList(List<LoomSlave> slaves) {
+        if (mSlaveList == null) return;
+        mSlaveList.removeAllViews();
+        if (mEmptySlavesText != null) {
+            mEmptySlavesText.setVisibility(slaves == null || slaves.isEmpty() ? View.VISIBLE : View.GONE);
+        }
+        if (slaves == null) return;
+        for (LoomSlave slave : slaves) {
+            mSlaveList.addView(createSlaveRow(slave));
+        }
+    }
+
+    private void dismissAuthDialogIfNoAuthRequired(List<LoomSlave> slaves) {
+        if (mAuthDialog == null || !mAuthDialog.isShowing()) return;
+        if (slaves != null) {
+            for (LoomSlave slave : slaves) {
+                if (LoomSlaveStatus.AUTH_REQUIRED.equals(slave.status)) {
+                    return;
+                }
             }
         }
+        dismissAuthDialog();
+    }
+
+    private View createSlaveRow(LoomSlave slave) {
+        Context context = requireContext();
+        LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
+        row.setBackgroundResource(R.drawable.bg_card);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowParams.setMargins(0, 0, 0, dp(8));
+        row.setLayoutParams(rowParams);
+
+        TextView title = new TextView(context);
+        title.setText("Slave：" + slave.displayName + " · " + slaveStatusLabel(slave.status));
+        title.setTextColor(getResources().getColor(R.color.app_text_primary));
+        title.setTextSize(14);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        row.addView(title);
+
+        TextView detail = new TextView(context);
+        detail.setText(slave.folder + "\n" + ProviderProfile.forProvider(
+            AssistantProvider.fromId(slave.providerId)).displayName);
+        detail.setTextColor(getResources().getColor(R.color.app_text_secondary));
+        detail.setTextSize(12);
+        detail.setPadding(0, dp(4), 0, 0);
+        row.addView(detail);
+
+        if (!slave.authUrl.isEmpty()) {
+            TextView auth = new TextView(context);
+            auth.setText("待认证：" + slave.authUrl);
+            auth.setTextColor(getResources().getColor(R.color.app_accent));
+            auth.setTextSize(12);
+            auth.setPadding(0, dp(6), 0, 0);
+            auth.setOnClickListener(v -> showAuthDialog(slave.authUrl));
+            row.addView(auth);
+        }
+        if (!slave.lastError.isEmpty()) {
+            TextView error = new TextView(context);
+            error.setText(slave.lastError);
+            error.setTextColor(getResources().getColor(R.color.app_warning));
+            error.setTextSize(12);
+            error.setPadding(0, dp(6), 0, 0);
+            row.addView(error);
+        }
+
+        LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(10), 0, 0);
+        row.addView(actions);
+
+        actions.addView(rowButton("启动/重启", R.color.app_accent, () -> startManagedSlave(slave)));
+        actions.addView(rowButton("暂停", R.color.app_primary, () -> pauseManagedSlave(slave)));
+        actions.addView(rowButton("删除", R.color.app_warning, () -> deleteManagedSlave(slave)));
+        return row;
+    }
+
+    private MaterialButton rowButton(String text, int colorRes, Runnable action) {
+        MaterialButton button = new MaterialButton(requireContext(), null,
+            com.google.android.material.R.attr.materialButtonOutlinedStyle);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setLetterSpacing(0);
+        button.setTextSize(12);
+        button.setTextColor(getResources().getColor(colorRes));
+        button.setMinHeight(dp(36));
+        button.setInsetTop(0);
+        button.setInsetBottom(0);
+        button.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            0,
+            dp(38),
+            1);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        button.setLayoutParams(params);
+        return button;
+    }
+
+    private void createManagedSlave() {
+        if (getContext() == null) return;
+        if (isLoomRuntimeBusy()) {
+            Toast.makeText(getContext(), "本机 Slave 操作正在执行", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        AssistantProvider provider = new ProviderSettingsStore(requireContext()).getSelectedProvider();
+        ProviderProfile profile = ProviderProfile.forProvider(provider);
+
+        LinearLayout content = new LinearLayout(requireContext());
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(18), dp(8), dp(18), 0);
+
+        EditText folderInput = new EditText(requireContext());
+        folderInput.setHint("工作目录，例如 " + profile.home);
+        folderInput.setSingleLine(true);
+        folderInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        folderInput.setText(profile.home);
+        content.addView(folderInput);
+
+        EditText nameInput = new EditText(requireContext());
+        nameInput.setHint("名称，默认使用目录名");
+        nameInput.setSingleLine(true);
+        nameInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        content.addView(nameInput);
+
+        new AlertDialog.Builder(requireContext())
+            .setTitle("创建本机 Slave")
+            .setView(content)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("创建并启动", (dialog, which) -> {
+                try {
+                    LoomSlaveRegistry registry = LoomSlaveRegistry.forContext(requireContext());
+                    LoomSlaveRegistry.Machine machine = registry.ensureMachine(currentDeviceName());
+                    LoomSlave slave = registry.create(
+                        machine,
+                        folderInput.getText().toString(),
+                        nameInput.getText().toString(),
+                        provider);
+                    refreshDashboard();
+                    startManagedSlave(slave);
+                } catch (IllegalArgumentException e) {
+                    Toast.makeText(getContext(), e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            })
+            .show();
+    }
+
+    private void startManagedSlave(LoomSlave slave) {
+        if (getContext() == null || slave == null) return;
+        if (isLoomRuntimeBusy()) {
+            Toast.makeText(getContext(), "本机 Slave 操作正在执行", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mAuthDialogShown = false;
+        AssistantProvider provider = AssistantProvider.fromId(slave.providerId);
+        LoomSettings settings = currentLoomSettings().withAgentProvider(provider);
+        LoomSlaveRegistry.Machine machine = currentMachine();
+        String script = LoomCommandBuilder.startManagedSlaveRuntimeScript(
+            prefix(),
+            settings,
+            slave,
+            machine.machineId,
+            machine.computerName);
+        runManagedSlaveScript(slave, script, "start");
+    }
+
+    private void pauseManagedSlave(LoomSlave slave) {
+        if (getContext() == null || slave == null) return;
+        if (isLoomRuntimeBusy()) {
+            Toast.makeText(getContext(), "本机 Slave 操作正在执行", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LoomSettings settings = currentLoomSettings().withAgentProvider(
+            AssistantProvider.fromId(slave.providerId));
+        runManagedSlaveScript(slave, LoomCommandBuilder.stopManagedSlaveScript(settings, slave), "pause");
+    }
+
+    private void deleteManagedSlave(LoomSlave slave) {
+        if (getContext() == null || slave == null) return;
+        new AlertDialog.Builder(requireContext())
+            .setTitle("删除本机 Slave")
+            .setMessage("删除这台设备上的本地配置和进程。远端 AgentServer 记录可能需要在网页中手动清理。确定删除吗？")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除", (dialog, which) -> {
+                LoomSettings settings = currentLoomSettings().withAgentProvider(
+                    AssistantProvider.fromId(slave.providerId));
+                runManagedSlaveScript(slave, LoomCommandBuilder.stopManagedSlaveScript(settings, slave), "delete");
+            })
+            .show();
+    }
+
+    private void runManagedSlaveScript(LoomSlave slave, String script, String action) {
+        LoomSlaveRegistry registry = LoomSlaveRegistry.forContext(requireContext());
+        registry.updateRuntime(slave.id, LoomSlaveStatus.STARTING, slave.pid, "", "");
+        refreshDashboard();
+        mLoomRuntimeThread = new Thread(() -> {
+            Process process = null;
+            int pid = slave.pid;
+            String prefix = prefix();
+            String bash = prefix + "/bin/bash";
+            String sysPath = System.getenv("PATH");
+            if (sysPath == null) sysPath = "";
+            String termuxPath = prefix + "/bin:" + prefix + "/bin/applets:" + sysPath;
+            try {
+                ProcessBuilder pb = new ProcessBuilder(bash, "-c", script);
+                pb.redirectErrorStream(true);
+                java.util.Map<String, String> env = pb.environment();
+                env.putAll(System.getenv());
+                env.put("PATH", termuxPath);
+                env.put("PREFIX", prefix);
+                env.put("HOME", prefix + "/../home");
+                process = pb.start();
+                mLoomRuntimeProcess = process;
+
+                BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        process.destroy();
+                        return;
+                    }
+                    if (line.startsWith("__LOOM_SLAVE_PID__=")) {
+                        pid = parsePid(line.substring("__LOOM_SLAVE_PID__=".length()));
+                        int currentPid = pid;
+                        post(() -> {
+                            LoomSlaveRegistry.forContext(requireContext()).updateRuntime(
+                                slave.id, LoomSlaveStatus.STARTING, currentPid, "", "");
+                            refreshDashboard();
+                        });
+                    } else if (line.startsWith("__LOOM_SLAVE_AUTH_URL__=")) {
+                        String authUrl = line.substring("__LOOM_SLAVE_AUTH_URL__=".length()).trim();
+                        int currentPid = pid;
+                        post(() -> {
+                            LoomSlaveRegistry.forContext(requireContext()).updateRuntime(
+                                slave.id, LoomSlaveStatus.AUTH_REQUIRED, currentPid, authUrl, "");
+                            showAuthDialog(authUrl);
+                            refreshDashboard();
+                        });
+                    } else if (line.startsWith("__LOOM_SLAVE_READY__=1")) {
+                        int currentPid = pid;
+                        post(() -> {
+                            LoomSlaveRegistry.forContext(requireContext()).updateRuntime(
+                                slave.id, LoomSlaveStatus.RUNNING, currentPid, "", "");
+                            dismissAuthDialog();
+                            refreshDashboard();
+                        });
+                    } else if (line.startsWith("__LOOM_SLAVE_ERROR__=")) {
+                        String error = line.substring("__LOOM_SLAVE_ERROR__=".length()).trim();
+                        post(() -> {
+                            LoomSlaveRegistry.forContext(requireContext()).updateRuntime(
+                                slave.id, LoomSlaveStatus.ERROR, 0, "", firstNonEmpty(error, "Slave 启动失败"));
+                            dismissAuthDialog();
+                            refreshDashboard();
+                        });
+                    } else {
+                        maybeShowAuthUrl(line);
+                    }
+                }
+                int exit = process.waitFor();
+                int finalPid = pid;
+                post(() -> handleManagedSlaveExit(slave, action, exit, finalPid));
+            } catch (InterruptedException ignored) {
+                if (process != null) process.destroy();
+            } catch (Exception e) {
+                post(() -> {
+                    LoomSlaveRegistry.forContext(requireContext()).updateRuntime(
+                        slave.id, LoomSlaveStatus.ERROR, 0, "", e.getMessage());
+                    refreshDashboard();
+                });
+            } finally {
+                if (mLoomRuntimeProcess == process) {
+                    mLoomRuntimeProcess = null;
+                }
+            }
+        }, "loom-managed-slave-" + slave.id);
+        mLoomRuntimeThread.setDaemon(true);
+        mLoomRuntimeThread.start();
+    }
+
+    private void handleManagedSlaveExit(LoomSlave slave, String action, int exit, int pid) {
+        LoomSlaveRegistry registry = LoomSlaveRegistry.forContext(requireContext());
+        if ("pause".equals(action) && exit == 0) {
+            registry.updateRuntime(slave.id, LoomSlaveStatus.PAUSED, 0, "", "");
+        } else if ("delete".equals(action) && exit == 0) {
+            registry.delete(slave.id);
+        } else if (exit != 0) {
+            LoomSlave latest = registry.get(slave.id);
+            if (!LoomSlaveStatus.ERROR.equals(latest.status) || latest.lastError.isEmpty()) {
+                registry.updateRuntime(slave.id, LoomSlaveStatus.ERROR, 0, "", "操作失败，退出码 " + exit);
+            }
+        } else if ("start".equals(action)) {
+            LoomSlave latest = registry.get(slave.id);
+            if (LoomSlaveStatus.STARTING.equals(latest.status)) {
+                registry.updateRuntime(slave.id, LoomSlaveStatus.STARTING, pid, "", "");
+            }
+        }
+        refreshDashboard();
     }
 
     private void showProviderDialog() {
@@ -232,31 +537,6 @@ public class CollaborationFragment extends Fragment {
             .show();
     }
 
-    private void showRoleDialog() {
-        if (getContext() == null) return;
-        String current = currentRoleMode();
-        new AlertDialog.Builder(requireContext())
-            .setTitle("切换本机身份")
-            .setSingleChoiceItems(ROLE_LABELS, indexOfRole(current), (dialog, which) -> {
-                dialog.dismiss();
-                switchRoleOnly(ROLE_VALUES[which]);
-            })
-            .setNegativeButton("取消", null)
-            .show();
-    }
-
-    private void switchRoleOnly(String role) {
-        if (getContext() == null) return;
-        String safeRole = normalizeRole(role);
-        String current = currentRoleMode();
-        if (safeRole.equals(current)) return;
-        requireContext().getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(LoomSettings.KEY_ROLE_MODE, safeRole)
-            .apply();
-        refreshDashboard();
-    }
-
     private void switchProviderAndMarkDriverStale(AssistantProvider provider) {
         if (getContext() == null) return;
         AssistantProvider safe = provider == null ? AssistantProvider.CODEX : provider;
@@ -267,59 +547,6 @@ public class CollaborationFragment extends Fragment {
             Toast.makeText(getContext(), "已切换 Agent，请按需重新绑定 Driver", Toast.LENGTH_SHORT).show();
         }
         refreshDashboard();
-    }
-
-    private void startSelectedRole() {
-        if (getContext() == null) return;
-        if (isLoomRuntimeBusy()) {
-            Toast.makeText(getContext(), "角色操作正在执行", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        AssistantProvider provider = new ProviderSettingsStore(requireContext()).getSelectedProvider();
-        LoomSettings settings = currentLoomSettings()
-            .withRoleMode(currentRoleMode())
-            .withAgentProvider(provider);
-        String role = normalizeRole(settings.roleMode);
-        mAuthDialogShown = false;
-
-        if ("observer".equals(role)) {
-            String script = transitionScript(settings, "observer")
-                + LoomCommandBuilder.setupConfigScript(settings)
-                + "\n" + LoomCommandBuilder.startObserverScript(prefix(), settings);
-            rememberRuntimeProvider(settings);
-            runLoomRuntimeScript(script, "启动 Observer", false);
-            return;
-        }
-
-        String driverStatus = currentDriverBindingStatus(provider);
-        if (!CollaborationConnectionState.canStartRole("slave", driverStatus)) {
-            setLocalRuntimeStatus("本机身份 · Slave（Driver 尚未绑定）");
-            Toast.makeText(getContext(), "Driver 尚未绑定，请先点击“绑定 Driver”。", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        String script = transitionScript(settings, "slave")
-            + LoomCommandBuilder.setupConfigScript(settings)
-            + "\n" + LoomCommandBuilder.startSlaveScript(prefix(), settings);
-        rememberRuntimeProvider(settings);
-        runLoomRuntimeScript(script, "启动 Slave", false);
-    }
-
-    private void stopSelectedRole() {
-        if (getContext() == null) return;
-        if (isLoomRuntimeBusy()) {
-            Toast.makeText(getContext(), "角色操作正在执行", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        String role = currentRoleMode();
-        LoomSettings settings = runtimeSettings();
-        if ("observer".equals(role)) {
-            runLoomRuntimeScript(LoomCommandBuilder.stopObserverScript(settings), "停止 Observer", false);
-            return;
-        }
-        runLoomRuntimeScript(LoomCommandBuilder.stopSlaveScript(settings), "停止 Slave", false);
     }
 
     private void bindDriverToCurrentAgent(AssistantProvider provider) {
@@ -362,8 +589,7 @@ public class CollaborationFragment extends Fragment {
     }
 
     private void runDriverBindingScript(String script, ProviderProfile profile) {
-        String prefix = System.getenv("PREFIX");
-        if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
+        String prefix = prefix();
         String bash = prefix + "/bin/bash";
         String sysPath = System.getenv("PATH");
         if (sysPath == null) sysPath = "";
@@ -433,60 +659,11 @@ public class CollaborationFragment extends Fragment {
         }
     }
 
-    private void runLoomRuntimeScript(String script, String label, boolean watchAuthUrl) {
-        String role = roleLabel(currentRoleMode());
-        setLocalRuntimeStatus("本机身份 · " + role + "（" + label + "中）");
-
-        mLoomRuntimeThread = new Thread(() -> {
-            Process process = null;
-            String prefix = prefix();
-            String bash = prefix + "/bin/bash";
-            String sysPath = System.getenv("PATH");
-            if (sysPath == null) sysPath = "";
-            String termuxPath = prefix + "/bin:" + prefix + "/bin/applets:" + sysPath;
-            try {
-                ProcessBuilder pb = new ProcessBuilder(bash, "-c", script);
-                pb.redirectErrorStream(true);
-                java.util.Map<String, String> env = pb.environment();
-                env.putAll(System.getenv());
-                env.put("PATH", termuxPath);
-                env.put("PREFIX", prefix);
-                env.put("HOME", prefix + "/../home");
-                process = pb.start();
-                mLoomRuntimeProcess = process;
-
-                BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        process.destroy();
-                        return;
-                    }
-                    if (watchAuthUrl) maybeShowAuthUrl(line);
-                }
-                int exit = process.waitFor();
-                post(() -> setLocalRuntimeStatus("本机身份 · " + role + "（"
-                    + label + (exit == 0 ? "完成" : "失败") + "）"));
-            } catch (InterruptedException ignored) {
-                if (process != null) process.destroy();
-            } catch (Exception e) {
-                post(() -> setLocalRuntimeStatus("本机身份 · " + role + "（" + label + "失败）"));
-            } finally {
-                if (mLoomRuntimeProcess == process) {
-                    mLoomRuntimeProcess = null;
-                }
-            }
-        }, "loom-runtime-" + normalizeRole(currentRoleMode()));
-        mLoomRuntimeThread.setDaemon(true);
-        mLoomRuntimeThread.start();
-    }
-
     private LoomSettings currentLoomSettings() {
         LoomSettings d = LoomSettings.defaults();
         SharedPreferences p = requireContext()
             .getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE);
-        LoomSettings settings = d.withRoleMode(normalizeRole(prefOrDefault(p, LoomSettings.KEY_ROLE_MODE, d.roleMode)))
+        LoomSettings settings = d.withRoleMode(prefOrDefault(p, LoomSettings.KEY_ROLE_MODE, d.roleMode))
             .withObserverUrl(prefOrDefault(p, LoomSettings.KEY_OBSERVER_URL, d.observerUrl))
             .withWorkspaceId(prefOrDefault(p, LoomSettings.KEY_WORKSPACE_ID, d.workspaceId))
             .withWorkspaceApiKey(prefOrDefault(p, LoomSettings.KEY_WORKSPACE_API_KEY, d.workspaceApiKey))
@@ -499,12 +676,6 @@ public class CollaborationFragment extends Fragment {
         return agentServerBackedSettings(settings);
     }
 
-    private LoomSettings runtimeSettings() {
-        AssistantProvider runtimeProvider = savedRuntimeProvider();
-        LoomSettings settings = currentLoomSettings();
-        return runtimeProvider == null ? settings : settings.withAgentProvider(runtimeProvider);
-    }
-
     private LoomSettings agentServerBackedSettings(LoomSettings settings) {
         SharedPreferences p = requireContext()
             .getSharedPreferences(AGENTSERVER_PREFS_NAME, Context.MODE_PRIVATE);
@@ -515,38 +686,6 @@ public class CollaborationFragment extends Fragment {
             p.getString(KEY_AGENTSERVER_SANDBOX_ID, ""),
             settings.workspaceId);
         return settings.withAgentServerUrl(serverUrl).withWorkspaceId(workspaceId);
-    }
-
-    @Nullable
-    private AssistantProvider savedRuntimeProvider() {
-        if (getContext() == null) return null;
-        SharedPreferences p = requireContext()
-            .getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE);
-        String id = p.getString(LoomSettings.KEY_AGENT_PROVIDER, null);
-        return id == null ? null : AssistantProvider.fromId(id);
-    }
-
-    private void rememberRuntimeProvider(LoomSettings settings) {
-        requireContext().getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(LoomSettings.KEY_AGENT_PROVIDER, settings.agentProvider.id)
-            .apply();
-    }
-
-    private String transitionScript(LoomSettings targetSettings, String role) {
-        AssistantProvider previousProvider = savedRuntimeProvider();
-        if (previousProvider == null || previousProvider == targetSettings.agentProvider) return "";
-
-        ProviderProfile previousProfile = ProviderProfile.forProvider(previousProvider);
-        LoomSettings previousSettings = targetSettings.withAgentProvider(previousProvider);
-        String header = "echo '[*] Loom 上次使用 " + previousProfile.displayName + "，先停止旧角色进程'\n";
-        if ("observer".equals(role)) {
-            return header + LoomCommandBuilder.stopObserverScript(previousSettings) + "\n";
-        }
-        if ("slave".equals(role)) {
-            return header + LoomCommandBuilder.stopSlaveScript(previousSettings) + "\n";
-        }
-        return "";
     }
 
     private void maybeShowAuthUrl(String line) {
@@ -564,7 +703,7 @@ public class CollaborationFragment extends Fragment {
     }
 
     private void showAuthDialog(String authUrl) {
-        if (getContext() == null) return;
+        if (getContext() == null || authUrl == null || authUrl.trim().isEmpty()) return;
         if (mAuthDialog != null && mAuthDialog.isShowing()) mAuthDialog.dismiss();
 
         View view = LayoutInflater.from(getContext())
@@ -580,7 +719,7 @@ public class CollaborationFragment extends Fragment {
             ClipboardManager cm = (ClipboardManager) requireContext()
                 .getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) cm.setPrimaryClip(
-                ClipData.newPlainText("loom driver auth url", authUrl));
+                ClipData.newPlainText("loom auth url", authUrl));
             Toast.makeText(getContext(), "链接已复制", Toast.LENGTH_SHORT).show();
         });
         view.findViewById(R.id.auth_btn_open).setOnClickListener(b -> {
@@ -735,24 +874,20 @@ public class CollaborationFragment extends Fragment {
             .apply();
     }
 
-    private void setLocalRuntimeStatus(String text) {
-        if (mLocalSlaveStatus != null) mLocalSlaveStatus.setText(text);
+    private LoomSlaveRegistry.Machine currentMachine() {
+        if (mMachine != null) return mMachine;
+        mMachine = LoomSlaveRegistry.forContext(requireContext()).ensureMachine(currentDeviceName());
+        return mMachine;
     }
 
-    private void updateRoleActionButtons(String role) {
-        String safeRole = normalizeRole(role);
-        if (mStartRoleButton != null) {
-            if ("observer".equals(safeRole)) {
-                mStartRoleButton.setText("启动 Observer");
-            } else {
-                mStartRoleButton.setText("启动 Slave");
-            }
-        }
-        if (mStopRoleButton != null) {
-            mStopRoleButton.setText("停止当前角色");
-            mStopRoleButton.setEnabled(true);
-            mStopRoleButton.setAlpha(1.0f);
-        }
+    private String currentDeviceName() {
+        if (getContext() == null) return "Android";
+        SharedPreferences p = requireContext()
+            .getSharedPreferences(AGENTSERVER_PREFS_NAME, Context.MODE_PRIVATE);
+        String configured = trim(p.getString(KEY_AGENTSERVER_DEVICE_NAME, ""));
+        if (!configured.isEmpty()) return configured;
+        String model = trim(Build.MODEL);
+        return model.isEmpty() ? "Android" : model;
     }
 
     private boolean isLoomRuntimeBusy() {
@@ -768,29 +903,25 @@ public class CollaborationFragment extends Fragment {
         if (getActivity() != null) getActivity().runOnUiThread(runnable);
     }
 
-    private static String roleLabel(String role) {
-        if ("observer".equals(role)) return "Observer";
-        return "Slave";
+    private String slaveStatusLabel(String status) {
+        if (LoomSlaveStatus.STARTING.equals(status)) return "启动中";
+        if (LoomSlaveStatus.AUTH_REQUIRED.equals(status)) return "待认证";
+        if (LoomSlaveStatus.RUNNING.equals(status)) return "运行中";
+        if (LoomSlaveStatus.PAUSED.equals(status)) return "已暂停";
+        if (LoomSlaveStatus.ERROR.equals(status)) return "出错";
+        return "已停止";
     }
 
-    private String currentRoleMode() {
-        if (getContext() == null) return "slave";
-        LoomSettings d = LoomSettings.defaults();
-        SharedPreferences p = requireContext()
-            .getSharedPreferences(LoomSettings.PREFS_NAME, Context.MODE_PRIVATE);
-        return normalizeRole(p.getString(LoomSettings.KEY_ROLE_MODE, d.roleMode));
-    }
-
-    private static int indexOfRole(String role) {
-        String safe = normalizeRole(role);
-        for (int i = 0; i < ROLE_VALUES.length; i++) {
-            if (ROLE_VALUES[i].equals(safe)) return i;
+    private int parsePid(String value) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception e) {
+            return 0;
         }
-        return 0;
     }
 
-    private static String normalizeRole(String role) {
-        return "observer".equals(role) ? "observer" : "slave";
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private static String shortId(String id) {
@@ -801,24 +932,21 @@ public class CollaborationFragment extends Fragment {
         return value == null ? "" : value.trim();
     }
 
-    private static String prefOrDefault(SharedPreferences prefs, String key, String defaultValue) {
-        String value = prefs.getString(key, defaultValue);
-        return value == null || value.trim().isEmpty() ? defaultValue : value.trim();
+    private static String prefOrDefault(SharedPreferences prefs, String key, String fallback) {
+        return firstNonEmpty(prefs.getString(key, ""), fallback);
     }
 
     private static String firstNonEmpty(String... values) {
         if (values == null) return "";
         for (String value : values) {
-            if (value != null && !value.trim().isEmpty()) {
-                return value.trim();
-            }
+            String v = trim(value);
+            if (!v.isEmpty()) return v;
         }
         return "";
     }
 
     @Nullable
     private TermuxActivity act() {
-        return (getActivity() instanceof TermuxActivity)
-            ? (TermuxActivity) getActivity() : null;
+        return getActivity() instanceof TermuxActivity ? (TermuxActivity) getActivity() : null;
     }
 }

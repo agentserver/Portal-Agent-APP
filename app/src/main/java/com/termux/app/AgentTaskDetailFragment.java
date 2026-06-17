@@ -22,10 +22,12 @@ import java.util.List;
 public class AgentTaskDetailFragment extends Fragment {
 
     private static final String ARG_TASK_ID = "task_id";
+    private static final String ARG_PROVIDER = "provider";
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private AgentTaskStore     mStore;
     private String             mTaskId;
+    private AssistantProvider  mProvider = AssistantProvider.CLAUDE;
     private final List<ChatMessage> mMessages = new ArrayList<>();
     private ChatAdapter        mAdapter;
     private RecyclerView       mRecycler;
@@ -34,9 +36,14 @@ public class AgentTaskDetailFragment extends Fragment {
     private Runnable           mPoller;
 
     public static AgentTaskDetailFragment newInstance(String taskId) {
+        return newInstance(AssistantProvider.CLAUDE, taskId);
+    }
+
+    public static AgentTaskDetailFragment newInstance(AssistantProvider provider, String taskId) {
         AgentTaskDetailFragment f = new AgentTaskDetailFragment();
         Bundle b = new Bundle();
         b.putString(ARG_TASK_ID, taskId);
+        b.putString(ARG_PROVIDER, (provider == null ? AssistantProvider.CLAUDE : provider).id);
         f.setArguments(b);
         return f;
     }
@@ -53,7 +60,9 @@ public class AgentTaskDetailFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         mTaskId = getArguments() != null ? getArguments().getString(ARG_TASK_ID) : null;
-        mStore  = new AgentTaskStore(requireContext());
+        String providerId = getArguments() != null ? getArguments().getString(ARG_PROVIDER) : null;
+        mProvider = providerId == null ? AssistantProvider.CLAUDE : AssistantProvider.fromId(providerId);
+        mStore  = new AgentTaskStore(requireContext(), mProvider);
 
         mTitle    = view.findViewById(R.id.agent_detail_title);
         mStatus   = view.findViewById(R.id.agent_detail_status);

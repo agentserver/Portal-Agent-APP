@@ -41,15 +41,18 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_delete_key"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:layout_marginStart="8dp"
             android:text="删除"
-            android:textColor="@color/app_danger"
+            android:textColor="@color/app_warning"
             android:textSize="12sp"
             android:insetTop="0dp"
-            android:insetBottom="0dp" />
+            android:insetBottom="0dp"
+            app:backgroundTint="@color/app_card_bg"
+            app:strokeColor="@color/app_warning"
+            app:strokeWidth="1dp" />
 
     </LinearLayout>
 
@@ -73,10 +76,12 @@
         android:layout_height="32dp"
         android:layout_marginTop="10dp"
         android:text="设为当前"
-        android:textColor="@color/app_primary"
+        android:textColor="@color/app_accent"
         android:textSize="12sp"
         android:insetTop="0dp"
         android:insetBottom="0dp"
-        app:strokeColor="@color/app_primary" />
+        app:backgroundTint="@color/app_card_bg"
+        app:strokeColor="@color/app_accent"
+        app:strokeWidth="1dp" />
 
 </LinearLayout>
