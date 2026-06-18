@@ -4,3 +4,4 @@
 *.mk        text eol=lf
 *.sh        text eol=lf
 ubuntu-claude-aarch64-20260506.tar.xz filter=lfs diff=lfs merge=lfs -text
+app/src/main/assets/loom-linux-arm64.tgz -text

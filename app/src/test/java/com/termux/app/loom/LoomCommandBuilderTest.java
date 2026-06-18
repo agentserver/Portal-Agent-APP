@@ -193,6 +193,9 @@ public class LoomCommandBuilderTest {
         Assert.assertTrue(setup.contains("Keeping registered Slave config"));
         Assert.assertTrue(setup.contains("slave_has_identity"));
         Assert.assertTrue(setup.contains("slave_server_matches"));
+        Assert.assertTrue(setup.contains("slave_credentials_valid"));
+        Assert.assertTrue(setup.contains("/api/agent/whoami"));
+        Assert.assertTrue(setup.contains("Slave credentials invalid; registering again"));
         Assert.assertTrue(start.contains("slave-agent /home/codex/.loom/slaves/slave-id/config.yaml"));
         Assert.assertTrue(start.contains("/home/codex/.loom/slaves/slave-id/logs/slave.log"));
         Assert.assertTrue(start.contains("__LOOM_SLAVE_PID__="));
@@ -235,6 +238,35 @@ public class LoomCommandBuilderTest {
         Assert.assertTrue(script.contains(": > "));
         Assert.assertTrue(script.contains("/home/codex/.loom/slaves/slave-id/logs/slave.log"));
         Assert.assertFalse(script.contains("echo \"__LOOM_SLAVE_AUTH_URL__=$url\"; exit 0"));
+    }
+
+    @Test
+    public void managedSlaveStartReportsDiscoveryCardPublishFailures() {
+        LoomSettings settings = LoomSettings.defaults()
+            .withAgentProvider(AssistantProvider.CODEX);
+        LoomSlave slave = new LoomSlave(
+            "slave-id",
+            "worker",
+            "BeamPro-worker",
+            "/home/codex/repo",
+            "/home/codex/.loom/slaves/slave-id/config.yaml",
+            "/home/codex/.loom/slaves/slave-id/logs/slave.log",
+            AssistantProvider.CODEX.id,
+            LoomSlaveStatus.STOPPED,
+            0,
+            "",
+            "",
+            1,
+            1);
+
+        String script = LoomCommandBuilder.startManagedSlaveScript(
+            "/data/data/com.termux/files/usr",
+            settings,
+            slave);
+
+        Assert.assertTrue(script.contains("publish card"));
+        Assert.assertTrue(script.contains("__LOOM_SLAVE_ERROR__=Slave 已连接，但能力卡发布失败"));
+        Assert.assertTrue(script.contains("Loom 版本或 AgentServer discovery 协议不兼容"));
     }
 
     @Test

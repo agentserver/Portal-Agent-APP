@@ -228,10 +228,15 @@ public final class LoomCommandBuilder {
             + "_slave_tmp=" + shellQuote(safeSlave.configPath + ".tmp.android") + "\n"
             + "printf '%s' '" + config + "' | base64 -d > \"$_slave_tmp\"\n"
             + "if [ -s \"$_slave_cfg\" ] && slave_has_identity \"$_slave_cfg\""
-                + " && slave_server_matches \"$_slave_cfg\" " + shellQuote(safeSettings.agentServerUrl) + "; then\n"
+                + " && slave_server_matches \"$_slave_cfg\" " + shellQuote(safeSettings.agentServerUrl)
+                + " && slave_credentials_valid \"$_slave_cfg\"; then\n"
             + "  echo '[*] Keeping registered Slave config'\n"
             + "  rm -f \"$_slave_tmp\"\n"
             + "else\n"
+            + "  if [ -s \"$_slave_cfg\" ] && slave_has_identity \"$_slave_cfg\""
+                + " && slave_server_matches \"$_slave_cfg\" " + shellQuote(safeSettings.agentServerUrl) + "; then\n"
+            + "    echo '[*] Slave credentials invalid; registering again'\n"
+            + "  fi\n"
             + "  mv \"$_slave_tmp\" \"$_slave_cfg\"\n"
             + "fi\n"
             + "chmod 600 \"$_slave_cfg\"\n";
@@ -278,6 +283,9 @@ public final class LoomCommandBuilder {
         String tailErrorCommand = ""
             + "tail -n 8 " + shellQuote(safeSlave.logPath)
                 + " 2>/dev/null | tr '\\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g' || true\n";
+        String discoveryCardErrorCommand = ""
+            + "grep -E 'publish card:.*status (4[0-9][0-9]|5[0-9][0-9])' "
+                + shellQuote(safeSlave.logPath) + " 2>/dev/null | tail -n 1 || true\n";
         String script = ""
             + "auth_emitted=0\n"
             + "pids=$(" + proot(findPidCommand, p.user) + " 2>/dev/null || true)\n"
@@ -294,6 +302,11 @@ public final class LoomCommandBuilder {
             + "    err=$(" + proot(tailErrorCommand, p.user) + " 2>/dev/null || true)\n"
             + "    [ -n \"$err\" ] || err='slave-agent 启动后立即退出'\n"
             + "    echo \"__LOOM_SLAVE_ERROR__=$err\"\n"
+            + "    exit 1\n"
+            + "  fi\n"
+            + "  card_err=$(" + proot(discoveryCardErrorCommand, p.user) + " 2>/dev/null || true)\n"
+            + "  if [ -n \"$card_err\" ]; then\n"
+            + "    echo \"__LOOM_SLAVE_ERROR__=Slave 已连接，但能力卡发布失败：$card_err。Loom 版本或 AgentServer discovery 协议不兼容\"\n"
             + "    exit 1\n"
             + "  fi\n"
             + "  if " + proot(identityCommand, p.user) + " >/dev/null 2>&1; then\n"
@@ -508,6 +521,10 @@ public final class LoomCommandBuilder {
 
     private static String slaveConfigIdentityFunctions() {
         return ""
+            + "slave_yaml_scalar() {\n"
+            + "  grep -E \"^[[:space:]]+$2:\" \"$1\" 2>/dev/null | head -n 1"
+                + " | sed 's/^[^:]*:[[:space:]]*//; s/^\"//; s/\"$//'\n"
+            + "}\n"
             + "slave_has_identity() {\n"
             + "  grep -Eq '^[[:space:]]+sandbox_id:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
                 + " && grep -Eq '^[[:space:]]+tunnel_token:[[:space:]]*\"?[^\"#[:space:]]+' \"$1\" 2>/dev/null"
@@ -518,7 +535,20 @@ public final class LoomCommandBuilder {
             + "slave_server_matches() {\n"
             + "  _expected=\"$2\"\n"
             + "  [ -z \"$_expected\" ] && return 0\n"
-            + "  grep -F \"  url: \\\"$_expected\\\"\" \"$1\" >/dev/null 2>&1 || grep -F \"  url: $_expected\" \"$1\" >/dev/null 2>&1\n"
+            + "  _actual=$(slave_yaml_scalar \"$1\" url)\n"
+            + "  _expected=${_expected%/}\n"
+            + "  _actual=${_actual%/}\n"
+            + "  [ \"$_actual\" = \"$_expected\" ]\n"
+            + "}\n"
+            + "slave_credentials_valid() {\n"
+            + "  command -v curl >/dev/null 2>&1 || return 1\n"
+            + "  _server=$(slave_yaml_scalar \"$1\" url)\n"
+            + "  _token=$(slave_yaml_scalar \"$1\" proxy_token)\n"
+            + "  [ -n \"$_server\" ] && [ -n \"$_token\" ] || return 1\n"
+            + "  _server=${_server%/}\n"
+            + "  _code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 15"
+                + " -H \"Authorization: Bearer $_token\" \"$_server/api/agent/whoami\" 2>/dev/null || true)\n"
+            + "  [ \"$_code\" = \"200\" ]\n"
             + "}\n";
     }
 
