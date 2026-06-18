@@ -241,7 +241,7 @@ public class LoomCommandBuilderTest {
     }
 
     @Test
-    public void managedSlaveStartReportsDiscoveryCardPublishFailures() {
+    public void managedSlaveStartFallsBackToAgentServerDiscoveryPostAfterCardPublishFailure() {
         LoomSettings settings = LoomSettings.defaults()
             .withAgentProvider(AssistantProvider.CODEX);
         LoomSlave slave = new LoomSlave(
@@ -265,8 +265,13 @@ public class LoomCommandBuilderTest {
             slave);
 
         Assert.assertTrue(script.contains("publish card"));
-        Assert.assertTrue(script.contains("__LOOM_SLAVE_ERROR__=Slave 已连接，但能力卡发布失败"));
-        Assert.assertTrue(script.contains("Loom 版本或 AgentServer discovery 协议不兼容"));
+        Assert.assertTrue(script.contains("/api/agent/discovery/cards"));
+        Assert.assertTrue(script.contains("--oauth2-bearer"));
+        Assert.assertTrue(script.contains("publish_discovery_card_fallback()"));
+        Assert.assertTrue(script.contains("if [ \"$card_post_ok\" = 0 ] && ! publish_discovery_card_fallback; then"));
+        Assert.assertTrue(script.contains("__LOOM_CARD_POST_OK__=1"));
+        Assert.assertTrue(script.contains("__LOOM_SLAVE_CARD_PUBLISHED__=1"));
+        Assert.assertTrue(script.contains("兼容发布也失败"));
     }
 
     @Test
