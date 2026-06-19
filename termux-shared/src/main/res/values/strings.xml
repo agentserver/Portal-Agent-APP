@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!DOCTYPE resources [
-    <!ENTITY TERMUX_PACKAGE_NAME "com.termux">
-    <!ENTITY TERMUX_APP_NAME "Claude Code Test">
-    <!ENTITY TERMUX_API_APP_NAME "Claude Code Test:API">
-    <!ENTITY TERMUX_BOOT_APP_NAME "Claude Code Test:Boot">
-    <!ENTITY TERMUX_FLOAT_APP_NAME "Claude Code Test:Float">
-    <!ENTITY TERMUX_STYLING_APP_NAME "Claude Code Test:Styling">
-    <!ENTITY TERMUX_TASKER_APP_NAME "Claude Code Test:Tasker">
-    <!ENTITY TERMUX_WIDGET_APP_NAME "Claude Code Test:Widget">
-    <!ENTITY TERMUX_PREFIX_DIR_PATH "/data/data/com.termux/files/usr">
+    <!ENTITY TERMUX_PACKAGE_NAME "com.portalagent">
+    <!ENTITY TERMUX_APP_NAME "PortalAgent">
+    <!ENTITY TERMUX_API_APP_NAME "PortalAgent:API">
+    <!ENTITY TERMUX_BOOT_APP_NAME "PortalAgent:Boot">
+    <!ENTITY TERMUX_FLOAT_APP_NAME "PortalAgent:Float">
+    <!ENTITY TERMUX_STYLING_APP_NAME "PortalAgent:Styling">
+    <!ENTITY TERMUX_TASKER_APP_NAME "PortalAgent:Tasker">
+    <!ENTITY TERMUX_WIDGET_APP_NAME "PortalAgent:Widget">
+    <!ENTITY TERMUX_PREFIX_DIR_PATH "/data/data/com.portalagent/files/usr">
     ]>
 
 <resources>

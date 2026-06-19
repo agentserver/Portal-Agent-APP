@@ -23,7 +23,6 @@ import java.util.regex.Pattern;
 public class SocketListener {
 
     public static final String LISTEN_ADDRESS = TermuxConstants.TERMUX_API_PACKAGE_NAME + "://listen";
-    private static final String COMPAT_LISTEN_ADDRESS = "com.termux.api://listen";
     private static final Pattern EXTRA_STRING = Pattern.compile("(-e|--es|--esa) +([^ ]+) +\"(.*?)(?<!\\\\)\"", Pattern.DOTALL);
     private static final Pattern EXTRA_BOOLEAN = Pattern.compile("--ez +([^ ]+) +([^ ]+)");
     private static final Pattern EXTRA_INT = Pattern.compile("--ei +([^ ]+) +(-?[0-9]+)");
@@ -42,9 +41,6 @@ public class SocketListener {
 
         List<String> addresses = new ArrayList<>();
         addresses.add(LISTEN_ADDRESS);
-        if (!LISTEN_ADDRESS.equals(COMPAT_LISTEN_ADDRESS)) {
-            addresses.add(COMPAT_LISTEN_ADDRESS);
-        }
 
         for (String address : addresses) {
             Thread listener = new Thread(() -> {

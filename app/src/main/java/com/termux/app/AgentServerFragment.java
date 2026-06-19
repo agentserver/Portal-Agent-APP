@@ -24,6 +24,7 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
 import com.termux.R;
+import com.termux.shared.termux.TermuxConstants;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -138,7 +139,7 @@ public class AgentServerFragment extends Fragment {
     private void checkStatus() {
         refreshProviderFromSettings();
         String prefix  = System.getenv("PREFIX");
-        if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
+        if (prefix == null || prefix.isEmpty()) prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
         String logFile = agentLogFile(prefix, mProvider);
         ProviderProfile profile = ProviderProfile.forProvider(mProvider);
         String processPattern = AgentServerCommandBuilder.processPattern(mProvider);
@@ -224,7 +225,7 @@ public class AgentServerFragment extends Fragment {
         }
 
         String prefix   = System.getenv("PREFIX");
-        if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
+        if (prefix == null || prefix.isEmpty()) prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
 
         // 优先级：用户手填沙盒 ID > 上次自动保存的 ID > 不传（首次新建）
         String resumeId = !code.isEmpty() ? code : mLastSandboxId;
@@ -310,7 +311,7 @@ public class AgentServerFragment extends Fragment {
         refreshProviderFromSettings();
         mMonitoring = true;
         String prefix = System.getenv("PREFIX");
-        if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
+        if (prefix == null || prefix.isEmpty()) prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
         String home     = prefix + "/../home";
         String agentLog = agentLogFile(prefix, mProvider);
         String mcpLog   = home + "/mcp-audit.log";
@@ -402,7 +403,7 @@ public class AgentServerFragment extends Fragment {
         setInfo("正在执行...");
 
         String prefix = System.getenv("PREFIX");
-        if (prefix == null || prefix.isEmpty()) prefix = "/data/data/com.termux/files/usr";
+        if (prefix == null || prefix.isEmpty()) prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
         String bash = prefix + "/bin/bash";
 
         String sysPath = System.getenv("PATH");

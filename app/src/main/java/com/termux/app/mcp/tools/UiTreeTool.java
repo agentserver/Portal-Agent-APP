@@ -48,7 +48,7 @@ public class UiTreeTool implements McpTool {
     public String call(JSONObject args, Context context) throws Exception {
         if (!McpAccessibilityService.isRunning()) {
             return textContent("Accessibility permission not granted. " +
-                "Please enable 'Claude Code Test' in Settings → Accessibility.");
+                "Please enable 'PortalAgent' in Settings → Accessibility.");
         }
 
         McpAccessibilityService svc = McpAccessibilityService.getInstance();

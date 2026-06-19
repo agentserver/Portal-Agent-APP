@@ -65,6 +65,7 @@ import com.termux.view.TerminalViewClient;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 import androidx.viewpager.widget.ViewPager;
 
@@ -278,11 +279,12 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         try {
             // Start the {@link TermuxService} and make it run regardless of who is bound to it
             Intent serviceIntent = new Intent(this, TermuxService.class);
-            startService(serviceIntent);
+            boolean serviceStarted = startTermuxService(serviceIntent);
 
             // Attempt to bind to the service, this will call the {@link #onServiceConnected(ComponentName, IBinder)}
             // callback if it succeeds.
-            if (!bindService(serviceIntent, this, 0))
+            int bindFlags = serviceStarted ? 0 : Context.BIND_AUTO_CREATE;
+            if (!bindService(serviceIntent, this, bindFlags))
                 throw new RuntimeException("bindService() failed");
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG,"TermuxActivity failed to start TermuxService", e);
@@ -297,6 +299,17 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         // Send the {@link TermuxConstants#BROADCAST_TERMUX_OPENED} broadcast to notify apps that Termux
         // app has been opened.
         TermuxUtils.sendTermuxOpenedBroadcast(this);
+    }
+
+    private boolean startTermuxService(Intent serviceIntent) {
+        try {
+            ContextCompat.startForegroundService(this, serviceIntent);
+            return true;
+        } catch (RuntimeException e) {
+            Logger.logStackTraceWithMessage(LOG_TAG,
+                "Started-service launch for TermuxService failed; falling back to bound service", e);
+            return false;
+        }
     }
 
     @Override

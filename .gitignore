@@ -18,6 +18,8 @@ release/
 !app/src/main/assets/termux-tools/*.tgz
 !app/src/main/assets/agentserver-linux-arm64.tgz
 !app/src/main/assets/loom-linux-arm64.tgz
+!release/
+!release/*.apk
 
 # Local large assets / helpers
 ubuntu_*.tar.*
@@ -56,6 +58,8 @@ task.jsonl
 .worktrees/
 __pycache__/
 *.pyc*
+xreal_*.png
+.tmp/
 
 # Local private deployment notes and secrets.
 # Never commit connector tokens, local runtime keys, or per-device fill-in data.

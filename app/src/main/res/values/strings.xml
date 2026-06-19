@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!DOCTYPE resources [
-    <!ENTITY TERMUX_PACKAGE_NAME "com.termux">
-    <!ENTITY TERMUX_APP_NAME "Claude Code Test">
-    <!ENTITY TERMUX_API_APP_NAME "Claude Code Test:API">
-    <!ENTITY TERMUX_BOOT_APP_NAME "Claude Code Test:Boot">
-    <!ENTITY TERMUX_FLOAT_APP_NAME "Claude Code Test:Float">
-    <!ENTITY TERMUX_STYLING_APP_NAME "Claude Code Test:Styling">
-    <!ENTITY TERMUX_TASKER_APP_NAME "Claude Code Test:Tasker">
-    <!ENTITY TERMUX_WIDGET_APP_NAME "Claude Code Test:Widget">
+    <!ENTITY TERMUX_PACKAGE_NAME "com.portalagent">
+    <!ENTITY TERMUX_APP_NAME "PortalAgent">
+    <!ENTITY TERMUX_API_APP_NAME "PortalAgent:API">
+    <!ENTITY TERMUX_BOOT_APP_NAME "PortalAgent:Boot">
+    <!ENTITY TERMUX_FLOAT_APP_NAME "PortalAgent:Float">
+    <!ENTITY TERMUX_STYLING_APP_NAME "PortalAgent:Styling">
+    <!ENTITY TERMUX_TASKER_APP_NAME "PortalAgent:Tasker">
+    <!ENTITY TERMUX_WIDGET_APP_NAME "PortalAgent:Widget">
     ]>
 
 <resources>
@@ -17,7 +17,7 @@
     <string name="shared_user_label">&TERMUX_APP_NAME; user</string>
 
     <!-- Android MCP Accessibility Service -->
-    <string name="mcp_accessibility_service_description">允许 Claude Code 通过 MCP 读取屏幕内容并执行点击、输入、滑动等 UI 操作。</string>
+    <string name="mcp_accessibility_service_description">允许 PortalAgent 通过 MCP 读取屏幕内容并执行点击、输入、滑动等 UI 操作。</string>
 
 
 

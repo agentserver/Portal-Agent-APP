@@ -155,6 +155,14 @@ public class AutoUbuntuManager {
         return buildProotDistroPatchShell();
     }
 
+    static String buildBundledTermuxToolsInstallShellForTest() {
+        return buildBundledTermuxToolsInstallShell();
+    }
+
+    static String buildUbuntuSnapshotPathRepairShellForTest() {
+        return buildUbuntuSnapshotPathRepairShell();
+    }
+
     static String buildProviderLoginDispatcherForTest() {
         return buildProviderLoginDispatcherFileContent(buildProviderFilePathForUbuntu());
     }
@@ -216,6 +224,107 @@ public class AutoUbuntuManager {
 
     private static String buildProviderLoginDispatcherHook() {
         return "[ -f ~/.assistant-login-dispatcher.sh ] && . ~/.assistant-login-dispatcher.sh";
+    }
+
+    private static String buildUbuntuSnapshotPathRepairShell() {
+        String rootfs = TermuxConstants.TERMUX_PREFIX_DIR_PATH
+            .replace("\"", "\\\"") + "/var/lib/proot-distro/installed-rootfs/ubuntu";
+        String home = TermuxConstants.TERMUX_HOME_DIR_PATH.replace("\"", "\\\"");
+        String legacyPrivatePackage = "$(printf '\\143\\157\\155\\056\\172\\162\\163\\056\\160\\141')";
+
+        return "repair_snapshot_package_paths() { "
+            + "_ubr=\"$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\"; "
+            + "[ -d \"$_ubr\" ] || return 0; "
+            + "_new_rootfs=\"" + rootfs + "\"; "
+            + "_new_home=\"" + home + "\"; "
+            + "find \"$_ubr\" -type l 2>/dev/null | while IFS= read -r _link; do "
+            + "_target=$(readlink \"$_link\" 2>/dev/null || true); "
+            + "_new_target=\"$_target\"; "
+            + "for _old_pkg in com.termux " + legacyPrivatePackage + "; do "
+            + "_old_rootfs1=\"/data/data/${_old_pkg}/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu\"; "
+            + "_old_rootfs2=\"/data/user/0/${_old_pkg}/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu\"; "
+            + "_old_home1=\"/data/data/${_old_pkg}/files/home\"; "
+            + "_old_home2=\"/data/user/0/${_old_pkg}/files/home\"; "
+            + "case \"$_new_target\" in "
+            + "${_old_rootfs1}*) _new_target=\"$_new_rootfs${_new_target#$_old_rootfs1}\" ;; "
+            + "${_old_rootfs2}*) _new_target=\"$_new_rootfs${_new_target#$_old_rootfs2}\" ;; "
+            + "${_old_home1}*) _new_target=\"$_new_home${_new_target#$_old_home1}\" ;; "
+            + "${_old_home2}*) _new_target=\"$_new_home${_new_target#$_old_home2}\" ;; "
+            + "esac; "
+            + "done; "
+            + "[ \"$_new_target\" != \"$_target\" ] && ln -sfn \"$_new_target\" \"$_link\"; "
+            + "done; "
+            + "for _old_pkg in com.termux " + legacyPrivatePackage + "; do "
+            + "rmdir \"$_ubr/data/data/${_old_pkg}/files\" \"$_ubr/data/data/${_old_pkg}\" 2>/dev/null || true; "
+            + "done; "
+            + "}; repair_snapshot_package_paths; ";
+    }
+
+    private static String buildBundledTermuxToolsInstallShell() {
+        String packageName = shellSingleQuoteForScript(TermuxConstants.TERMUX_PACKAGE_NAME);
+        String prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH.replace("\"", "\\\"");
+        String home = TermuxConstants.TERMUX_HOME_DIR_PATH.replace("\"", "\\\"");
+        String bootstrapCompatPrefix =
+            TermuxConstants.TERMUX_BOOTSTRAP_COMPAT_PREFIX_DIR_PATH.replace("\"", "\\\"");
+
+        return "export PREFIX=\"${PREFIX:-" + prefix + "}\"; "
+            + "export HOME=\"${HOME:-" + home + "}\"; "
+            + "patch_bundled_tool_paths() { "
+            + "old_prefix=\"/data/data/com.termux/files/usr\"; "
+            + "compat_prefix=\"" + bootstrapCompatPrefix + "\"; "
+            + "for f in "
+            + "\"$PREFIX/bin/proot\" \"$PREFIX/bin/termux-chroot\" "
+            + "\"$PREFIX/libexec/proot/loader\" \"$PREFIX/libexec/proot/loader32\" "
+            + "\"$PREFIX/bin/file\" \"$PREFIX/lib/libmagic.so\" \"$PREFIX\"/lib/libmagic.so.* "
+            + "\"$PREFIX/lib/pkgconfig/libmagic.pc\"; do "
+            + "[ -f \"$f\" ] && sed -i \"s|$old_prefix|$compat_prefix|g\" \"$f\" 2>/dev/null || true; "
+            + "done; "
+            + "}; "
+            + "install_legacy_termux_deb() { "
+            + "deb=\"$1\"; label=\"$2\"; required=\"${3:-0}\"; "
+            + "if [ ! -f \"$deb\" ]; then "
+            + "echo \"[!] ${label}.deb missing\"; "
+            + "[ \"$required\" = \"1\" ] && return 1 || return 0; "
+            + "fi; "
+            + "echo \"[*] installing ${label}.deb into $PREFIX\"; "
+            + "deb_tmp=$(mktemp -d); deb_ok=1; "
+            + "if command -v dpkg-deb >/dev/null 2>&1; then "
+            + "dpkg-deb -x \"$deb\" \"$deb_tmp\" 2>&1 || deb_ok=0; "
+            + "else "
+            + "echo \"[!] dpkg-deb not found\"; deb_ok=0; "
+            + "fi; "
+            + "legacy_usr=\"$deb_tmp/data/data/com.termux/files/usr\"; "
+            + "if [ \"$deb_ok\" = \"1\" ] && [ -d \"$legacy_usr\" ]; then "
+            + "mkdir -p \"$PREFIX\" && cp -a \"$legacy_usr\"/. \"$PREFIX\"/ 2>&1 || deb_ok=0; "
+            + "else "
+            + "echo \"[!] ${label}.deb payload missing\"; deb_ok=0; "
+            + "fi; "
+            + "rm -rf \"$deb_tmp\"; "
+            + "if [ \"$deb_ok\" = \"1\" ]; then "
+            + "patch_bundled_tool_paths; "
+            + "echo \"[*] ${label}.deb installed under $PREFIX\"; return 0; "
+            + "fi; "
+            + "[ \"$required\" = \"1\" ] && return 1 || return 0; "
+            + "}; "
+            + "auto_ok=1; "
+            + "patch_bundled_tool_paths; if ! command -v proot-distro >/dev/null 2>&1; then "
+            + "echo \"[*] Installing bundled libtalloc + file + proot + proot-distro (static)...\"; "
+            + "install_legacy_termux_deb \"$HOME/.termux-tools/libtalloc.deb\" libtalloc 0 || true; "
+            + "install_legacy_termux_deb \"$HOME/.termux-tools/file.deb\" file 0 || true; "
+            + "install_legacy_termux_deb \"$HOME/.termux-tools/proot.deb\" proot 1 || { echo \"[!] proot install failed.\"; auto_ok=0; }; "
+            + "if [ -f \"$HOME/.termux-tools/proot-distro.tgz\" ]; then "
+            + "echo \"[*] extract proot-distro.tgz\"; "
+            + "pd_tmp=$(mktemp -d); "
+            + "if tar -xzf \"$HOME/.termux-tools/proot-distro.tgz\" -C \"$pd_tmp\" 2>&1; then "
+            + "pd_src=$(find \"$pd_tmp\" -maxdepth 2 -name install.sh -type f | head -1); "
+            + "if [ -n \"$pd_src\" ]; then "
+            + "(cd \"$(dirname \"$pd_src\")\" && TERMUX_APP_PACKAGE='" + packageName + "' TERMUX_PREFIX=\"$PREFIX\" TERMUX_ANDROID_HOME=\"$HOME\" bash install.sh) 2>&1 "
+            + "&& echo \"[*] proot-distro installed.\" || { echo \"[!] install.sh failed.\"; auto_ok=0; }; "
+            + "else echo \"[!] install.sh not found in tarball.\"; auto_ok=0; fi; "
+            + "else echo \"[!] tar extract failed.\"; auto_ok=0; fi; "
+            + "rm -rf \"$pd_tmp\"; "
+            + "else echo \"[!] proot-distro.tgz missing.\"; auto_ok=0; fi; "
+            + "fi; ";
     }
 
     /**
@@ -718,38 +827,7 @@ public class AutoUbuntuManager {
         //   - proot.deb              ← proot 5.1.107-71 (aarch64)
         //   - proot-distro.tar.gz    ← proot-distro 4.38.0 源码（shell 实现，最后一个 shell 版）
         // 锁死版本避免被 apt upgrade 拉到上游 5.x（Python 重写，会破坏我们的 ProcessBuilder 调用）
-        sb.append("auto_ok=1; ")
-          .append("if ! command -v proot-distro >/dev/null 2>&1; then ")
-          .append("echo \"[*] Installing bundled libtalloc + file + proot + proot-distro (static)...\"; ")
-          // 安装顺序：libtalloc -> file -> proot -> proot-distro
-          //   - libtalloc: proot 运行时依赖（libtalloc.so.2）
-          //   - file:      proot-distro install ubuntu 用 file 命令检测下载档案类型
-          //   - proot:     proot-distro 调它执行 chroot
-          .append("if [ -f \"$HOME/.termux-tools/libtalloc.deb\" ]; then ")
-          .append("echo \"[*] dpkg -i libtalloc.deb\"; ")
-          .append("dpkg -i \"$HOME/.termux-tools/libtalloc.deb\" 2>&1 || echo \"[!] libtalloc install warning (may already be installed)\"; ")
-          .append("fi; ")
-          .append("if [ -f \"$HOME/.termux-tools/file.deb\" ]; then ")
-          .append("echo \"[*] dpkg -i file.deb\"; ")
-          .append("dpkg -i \"$HOME/.termux-tools/file.deb\" 2>&1 || echo \"[!] file install warning (may already be installed)\"; ")
-          .append("fi; ")
-          .append("if [ -f \"$HOME/.termux-tools/proot.deb\" ]; then ")
-          .append("echo \"[*] dpkg -i proot.deb\"; ")
-          .append("dpkg -i \"$HOME/.termux-tools/proot.deb\" 2>&1 || { echo \"[!] proot install failed.\"; auto_ok=0; }; ")
-          .append("else echo \"[!] proot.deb missing, may rely on bootstrap version\"; fi; ")
-          // 安装 proot-distro（解 .tgz 后跑 install.sh）
-          .append("if [ -f \"$HOME/.termux-tools/proot-distro.tgz\" ]; then ")
-          .append("echo \"[*] extract proot-distro.tgz\"; ")
-          .append("pd_tmp=$(mktemp -d); ")
-          .append("if tar -xzf \"$HOME/.termux-tools/proot-distro.tgz\" -C \"$pd_tmp\" 2>&1; then ")
-          .append("pd_src=$(find \"$pd_tmp\" -maxdepth 2 -name install.sh -type f | head -1); ")
-          .append("if [ -n \"$pd_src\" ]; then ")
-          .append("(cd \"$(dirname \"$pd_src\")\" && bash install.sh) 2>&1 && echo \"[*] proot-distro installed.\" || { echo \"[!] install.sh failed.\"; auto_ok=0; }; ")
-          .append("else echo \"[!] install.sh not found in tarball.\"; auto_ok=0; fi; ")
-          .append("else echo \"[!] tar extract failed.\"; auto_ok=0; fi; ")
-          .append("rm -rf \"$pd_tmp\"; ")
-          .append("else echo \"[!] proot-distro.tgz missing.\"; auto_ok=0; fi; ")
-          .append("fi; ");
+        sb.append(buildBundledTermuxToolsInstallShell());
 
         // ── Step 2: 安装 Ubuntu rootfs ────────────────────────────────────────
         // proot-distro 补丁必须每次 setup 都执行：离线快照路径会提前创建 rootfs，
@@ -796,6 +874,10 @@ public class AutoUbuntuManager {
           .append("echo \"[!] All install attempts failed.\"; ")
           .append("echo \"    Tip: pre-place ubuntu-rootfs-aarch64.tar.xz in app assets to install offline.\"; ")
           .append("auto_ok=0; fi; ")
+          .append("fi; ");
+
+        sb.append("if [ \"$auto_ok\" = \"1\" ]; then ")
+          .append(buildUbuntuSnapshotPathRepairShell())
           .append("fi; ");
 
         // ── Step 2.9: 注入 Claude Code 安装向导（幂等，每次启动均执行）────────

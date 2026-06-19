@@ -1,4 +1,5 @@
-# 快照文件 171MB，不入 git，构建前手动放置或 CI 下载
+# 当前发布快照通过 Git LFS 入库；其他临时 rootfs 包仍忽略。
 *.tar.xz
 *.tar.gz
 *.tar.zst
+!ubuntu-claude-aarch64-20260512.tar.xz

@@ -5,6 +5,7 @@ import android.content.res.AssetManager;
 import androidx.annotation.NonNull;
 
 import com.termux.app.TermuxActivity;
+import com.termux.shared.termux.TermuxConstants;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -132,7 +133,7 @@ public class AutoAgentServerManager {
         new Thread(() -> {
             String prefix = System.getenv("PREFIX");
             if (prefix == null || prefix.isEmpty())
-                prefix = "/data/data/com.termux/files/usr";
+                prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH;
             String tgzPath = new File(mActivity.getFilesDir(), ASSET_TGZ_REL).getAbsolutePath();
             String bash = prefix + "/bin/bash";
             String termuxHome = prefix + "/../home";

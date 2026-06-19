@@ -11,6 +11,7 @@ import com.termux.api.apis.BatteryStatusAPI;
 import com.termux.api.apis.CameraInfoAPI;
 import com.termux.api.apis.SensorAPI;
 import com.termux.app.TermuxActivity;
+import com.termux.shared.termux.TermuxConstants;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -150,7 +151,7 @@ public class CapabilitiesManager {
                 .put("termux-camera-info")
                 .put("termux-wifi-connectioninfo"));
             apiInstructions.put("capabilities_file",
-                "/data/data/com.termux/files/home/capabilities.json");
+                TermuxConstants.TERMUX_HOME_DIR_PATH + "/capabilities.json");
             root.put("api_instructions", apiInstructions);
 
             // ── 生成时间 ──────────────────────────────────────────────────────

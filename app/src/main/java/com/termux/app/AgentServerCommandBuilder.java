@@ -1,5 +1,7 @@
 package com.termux.app;
 
+import com.termux.shared.termux.TermuxConstants;
+
 public final class AgentServerCommandBuilder {
 
     public static final class Config {
@@ -32,7 +34,7 @@ public final class AgentServerCommandBuilder {
         Config cfg = c == null ? new Config("", "", "", "", "") : c;
         ProviderProfile p = ProviderProfile.forProvider(safeProvider);
         String safePrefix = (prefix == null || prefix.isEmpty())
-            ? "/data/data/com.termux/files/usr"
+            ? TermuxConstants.TERMUX_PREFIX_DIR_PATH
             : prefix;
         String home = safePrefix + "/../home";
         String logFile = home + (safeProvider == AssistantProvider.CODEX

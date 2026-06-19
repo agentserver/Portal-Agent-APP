@@ -77,7 +77,7 @@ public class AppTool implements McpTool {
     private String getCurrentActivity() throws Exception {
         if (!McpAccessibilityService.isRunning()) {
             return text("Accessibility permission not granted. " +
-                "Please enable 'Claude Code Test' in Settings → Accessibility.");
+                "Please enable 'PortalAgent' in Settings → Accessibility.");
         }
         McpAccessibilityService svc = McpAccessibilityService.getInstance();
         JSONObject result = new JSONObject();

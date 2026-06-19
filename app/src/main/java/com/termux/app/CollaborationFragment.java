@@ -35,6 +35,7 @@ import com.termux.app.loom.LoomSlave;
 import com.termux.app.loom.LoomSlaveListPolicy;
 import com.termux.app.loom.LoomSlaveRegistry;
 import com.termux.app.loom.LoomSlaveStatus;
+import com.termux.shared.termux.TermuxConstants;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -1013,7 +1014,7 @@ public class CollaborationFragment extends Fragment {
 
     private String prefix() {
         String p = System.getenv("PREFIX");
-        return (p == null || p.isEmpty()) ? "/data/data/com.termux/files/usr" : p;
+        return (p == null || p.isEmpty()) ? TermuxConstants.TERMUX_PREFIX_DIR_PATH : p;
     }
 
     private void post(Runnable runnable) {

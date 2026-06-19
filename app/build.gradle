@@ -51,7 +51,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.termux"
+        applicationId "com.portalagent"
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         versionCode 118
@@ -62,14 +62,14 @@ android {
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
-        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"
-        manifestPlaceholders.TERMUX_APP_NAME = "Claude Code Test"
-        manifestPlaceholders.TERMUX_API_APP_NAME = "Claude Code Test:API"
-        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Claude Code Test:Boot"
-        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Claude Code Test:Float"
-        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Claude Code Test:Styling"
-        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Claude Code Test:Tasker"
-        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Claude Code Test:Widget"
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.portalagent"
+        manifestPlaceholders.TERMUX_APP_NAME = "PortalAgent"
+        manifestPlaceholders.TERMUX_API_APP_NAME = "PortalAgent:API"
+        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "PortalAgent:Boot"
+        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "PortalAgent:Float"
+        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "PortalAgent:Styling"
+        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "PortalAgent:Tasker"
+        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "PortalAgent:Widget"
 
         externalNativeBuild {
             ndkBuild {
@@ -150,10 +150,10 @@ android {
         variant.outputs.all { output ->
             if (variant.buildType.name == "debug") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("claude-code-test-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("portal-agent_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
             } else if (variant.buildType.name == "release") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("claude-code-test-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("portal-agent_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
             }
         }
     }
@@ -339,16 +339,20 @@ def patchBootstrapZip = { File zipFile, String oldPackage, String newPackage ->
 
 task patchBootstrapsForPackage() {
     doLast {
-        def oldPackage = "com.termux"
+        def legacyPrivatePackage = [99,111,109,46,122,114,115,46,112,97]
+            .collect { new String(Character.toChars(it)) }.join("")
+        def oldPackages = ["com.termux", legacyPrivatePackage]
         def newPackage = android.defaultConfig.applicationId
-        if (oldPackage == newPackage) return
+        if (oldPackages.every { it == newPackage }) return
 
         def zips = fileTree(new File(projectDir, 'src/main/cpp')) { include 'bootstrap-*.zip' }
         if (zips.isEmpty()) return
 
         zips.each { File zipFile ->
-            logger.quiet("Patching bootstrap zip for package: ${zipFile.name}")
-            patchBootstrapZip(zipFile, oldPackage, newPackage)
+            oldPackages.findAll { it != newPackage }.each { oldPackage ->
+                logger.quiet("Patching bootstrap zip for package: ${zipFile.name}")
+                patchBootstrapZip(zipFile, oldPackage, newPackage)
+            }
         }
 
         // Ensure ndk-build recompiles termux-bootstrap-zip.S after patching.

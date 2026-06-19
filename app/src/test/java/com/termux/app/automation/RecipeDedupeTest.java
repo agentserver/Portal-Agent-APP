@@ -17,7 +17,7 @@ public class RecipeDedupeTest {
     public void similarSettingsRecipesMergeAsVersions() throws Exception {
         ScreenFingerprint end = new ScreenFingerprint(
             "com.android.settings", "AccessibilitySettings",
-            Arrays.asList("已下载的应用", "Claude Code Test"), 7, 0, "root");
+            Arrays.asList("已下载的应用", "PortalAgent"), 7, 0, "root");
         ActionRecipe existing = recipe("r1", "打开无障碍设置", AutomationRiskLevel.LOW, end, "v1");
         ActionRecipe candidate = recipe("r2", "进入辅助功能权限页", AutomationRiskLevel.LOW, end, "v2");
 

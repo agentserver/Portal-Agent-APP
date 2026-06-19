@@ -8,6 +8,7 @@ import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -83,6 +84,24 @@ public class LoomLocalSlaveRuntimeStoreTest {
         Assert.assertTrue(rewritten.contains("[mcp_servers.android-mcp]"));
     }
 
+    @Test
+    public void syncDoesNotCreatePrefixBeforeUbuntuRootfsExists() {
+        File filesDir = RuntimeEnvironment.getApplication().getFilesDir();
+        deleteRecursively(new File(filesDir, "usr"));
+
+        LoomLocalSlaveRuntimeStore.sync(
+            RuntimeEnvironment.getApplication(),
+            "BeamPro",
+            Arrays.asList(slave(
+                "11111111-1111-4111-8111-111111111111",
+                "BeamPro-slave1",
+                AssistantProvider.CODEX,
+                LoomSlaveStatus.RUNNING,
+                20)));
+
+        Assert.assertFalse(new File(filesDir, "usr").exists());
+    }
+
     private static LoomSlave slave(
             String id,
             String displayName,
@@ -103,5 +122,16 @@ public class LoomLocalSlaveRuntimeStoreTest {
             "",
             1,
             updatedAt);
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) return;
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
+            }
+        }
+        file.delete();
     }
 }

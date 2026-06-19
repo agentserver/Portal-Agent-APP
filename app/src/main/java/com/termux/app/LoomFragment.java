@@ -27,6 +27,7 @@ import androidx.fragment.app.Fragment;
 import com.termux.R;
 import com.termux.app.loom.LoomCommandBuilder;
 import com.termux.app.loom.LoomSettings;
+import com.termux.shared.termux.TermuxConstants;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -372,7 +373,7 @@ public class LoomFragment extends Fragment {
 
     private String prefix() {
         String p = System.getenv("PREFIX");
-        return (p == null || p.isEmpty()) ? "/data/data/com.termux/files/usr" : p;
+        return (p == null || p.isEmpty()) ? TermuxConstants.TERMUX_PREFIX_DIR_PATH : p;
     }
 
     private void appendLog(String text) {

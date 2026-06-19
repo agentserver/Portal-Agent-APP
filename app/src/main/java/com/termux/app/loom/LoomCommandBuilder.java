@@ -1,6 +1,7 @@
 package com.termux.app.loom;
 
 import com.termux.app.AssistantProvider;
+import com.termux.shared.termux.TermuxConstants;
 import com.termux.app.ProviderProfile;
 
 public final class LoomCommandBuilder {
@@ -500,7 +501,7 @@ public final class LoomCommandBuilder {
     }
 
     private static String header() {
-        return "#!/data/data/com.termux/files/usr/bin/bash\n"
+        return "#!" + TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/bin/bash\n"
             + "set -e\n";
     }
 

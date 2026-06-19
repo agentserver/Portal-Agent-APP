@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Accessibility Service that exposes UI control to Claude Code via MCP tools.
  *
- * Enabled by the user in: Settings → Accessibility → Claude Code Test
+ * Enabled by the user in: Settings → Accessibility → PortalAgent
  * Required for: ui.tap, ui.swipe, ui.click_text, ui.input_text,
  *               ui.get_accessibility_tree, app.get_current_activity
  */

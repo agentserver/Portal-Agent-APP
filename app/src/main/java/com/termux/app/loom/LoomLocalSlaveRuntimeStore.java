@@ -32,6 +32,7 @@ public final class LoomLocalSlaveRuntimeStore {
 
     public static void sync(Context context, String machineName, List<LoomSlave> slaves) {
         if (context == null) return;
+        if (!isUbuntuRootfsReady(context)) return;
         for (AssistantProvider provider : AssistantProvider.values()) {
             try {
                 File home = providerHome(context, provider);
@@ -124,6 +125,16 @@ public final class LoomLocalSlaveRuntimeStore {
     private static File providerHome(Context context, AssistantProvider provider) {
         ProviderProfile profile = ProviderProfile.forProvider(provider);
         return new File(context.getFilesDir(), UBUNTU_ROOTFS_RELATIVE + profile.home);
+    }
+
+    private static boolean isUbuntuRootfsReady(Context context) {
+        File rootfs = new File(context.getFilesDir(), UBUNTU_ROOTFS_RELATIVE);
+        if (!rootfs.isDirectory()) return false;
+        if (!new File(rootfs, "etc/passwd").isFile()) return false;
+        if (!new File(rootfs, "etc/os-release").isFile()) return false;
+        if (!new File(rootfs, "usr/bin/env").isFile()) return false;
+        return new File(rootfs, "bin/sh").exists()
+            || new File(rootfs, "usr/bin/sh").exists();
     }
 
     private static void ensureDriverMcpRuntime(File home, AssistantProvider provider) throws IOException {

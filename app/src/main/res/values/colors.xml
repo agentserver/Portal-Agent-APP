@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#0B1E2B</color>
+    <color name="ic_launcher_background">#ECFEFF</color>
+    <color name="portalagent_splash_background">#ECFEFF</color>
 
     <!-- ── Brand ─────────────────────────────────────────── -->
     <color name="app_primary">#2563EB</color>
